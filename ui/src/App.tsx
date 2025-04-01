@@ -1,8 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Button } from "@/components/ui/button";
+import { UploadGuidelinesModal } from "@/components/ui/upload-guidelines-modal";
 import "@/animations.css";
-import { login, checkImageCompliance } from "@/services/complianceService";
+import {
+  login,
+  checkImageCompliance,
+  checkVideoCompliance,
+} from "@/services/complianceService";
 import ReactMarkdown from "react-markdown";
 
 interface ComplianceEvent {
@@ -18,16 +23,29 @@ interface Step {
 }
 
 export default function App() {
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isVideo, setIsVideo] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [steps, setSteps] = useState<Step[]>([]);
   const [finalResult, setFinalResult] = useState<string | null>(null);
   const [stepsCollapsed, setStepsCollapsed] = useState(false);
   const [allowAutoCollapse, setAllowAutoCollapse] = useState(true);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const stepsEndRef = useRef<HTMLDivElement>(null);
   const finalResultRef = useRef<HTMLDivElement>(null);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Login on component mount
   useEffect(() => {
@@ -66,22 +84,42 @@ export default function App() {
   }, [finalResult]);
 
   const handleFileSelect = (file: File) => {
-    if (file.type.startsWith("image/")) {
-      setSelectedImage(file);
+    // Reset video URL if a file is selected
+    setVideoUrl(null);
 
-      // Create preview
-      const reader = new FileReader();
-      reader.onload = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    // Check if the file is a video or an image
+    const isVideoFile = file.type.startsWith("video/");
+    setIsVideo(isVideoFile);
+    setSelectedFile(file);
 
-      // Clear previous results
-      setSteps([]);
-      setFinalResult(null);
-      setStepsCollapsed(false);
-      setAllowAutoCollapse(true);
-    }
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFilePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    // Clear previous results
+    setSteps([]);
+    setFinalResult(null);
+    setStepsCollapsed(false);
+    setAllowAutoCollapse(true);
+  };
+
+  const handleUrlSubmit = (url: string) => {
+    // Reset selected file if a URL is submitted
+    setSelectedFile(null);
+    setFilePreview(null);
+
+    // Set video URL and mark as video
+    setVideoUrl(url);
+    setIsVideo(true);
+
+    // Clear previous results
+    setSteps([]);
+    setFinalResult(null);
+    setStepsCollapsed(false);
+    setAllowAutoCollapse(true);
   };
 
   // Helper function to try parsing JSON
@@ -102,10 +140,27 @@ export default function App() {
     return undefined;
   };
 
-  const processImage = async () => {
-    if (!selectedImage) {
-      console.error("No image selected");
+  // Format elapsed time into mm:ss
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
+  };
+
+  const processMedia = async () => {
+    if (!selectedFile && !videoUrl) {
+      console.error("No file or URL selected");
       return;
+    }
+
+    // Reset and start timer for video processing
+    setElapsedTime(0);
+    if (isVideo) {
+      timerIntervalRef.current = setInterval(() => {
+        setElapsedTime((prev) => prev + 1);
+      }, 1000);
     }
 
     if (!authToken) {
@@ -120,14 +175,15 @@ export default function App() {
     setAllowAutoCollapse(true);
 
     try {
-      console.log("Processing image:", selectedImage.name);
+      const mediaName = selectedFile ? selectedFile.name : videoUrl;
+      console.log(`Processing ${isVideo ? "video" : "image"}:`, mediaName);
 
       // Add initial step
       setSteps([
         {
           id: Date.now().toString(),
           type: "text",
-          content: `Starting compliance check for ${selectedImage.name}`,
+          content: `Starting compliance check for ${mediaName}`,
         },
       ]);
 
@@ -136,86 +192,117 @@ export default function App() {
       let currentStepId: string | null = null;
       let lastEventType: "text" | "tool" | null = null;
 
-      // Call the compliance API
-      await checkImageCompliance(
-        selectedImage,
-        "YOU MUST ONLY CHECK THE `get_region_color_scheme` AND THE `check_color_contrast` TOOL",
-        authToken,
-        (event: ComplianceEvent) => {
-          // Log the event to console
-          console.log(`[${event.type}]`, event.content);
+      // Event handler for both image and video compliance checks
+      const handleComplianceEvent = (event: ComplianceEvent) => {
+        // Log the event to console
+        console.log(`[${event.type}]`, event.content);
 
-          // Only process text and tool events for steps
-          if (event.type === "text" || event.type === "tool") {
-            // If the event type has changed or we don't have a current step,
-            // create a new step and reset the content
-            if (event.type !== lastEventType || !currentStepId) {
-              // If we have accumulated content, create a new step
-              if (currentContent && currentStepId) {
-                // We're switching to a new type, so finalize the current step
-                // (This is already handled by the state updates below)
-              }
-
-              // Create a new step for the new type
-              const newId = `${event.type}-${Date.now()}`;
-              currentStepId = newId;
-              currentContent = event.content;
-              lastEventType = event.type;
-
-              // Extract task detail for tool events
-              const taskDetail =
-                event.type === "tool"
-                  ? extractTaskDetail(event.content)
-                  : undefined;
-
-              // Add the new step (ensuring type is only 'text' or 'tool')
-              setSteps((prev) => [
-                ...prev,
-                {
-                  id: newId,
-                  type: event.type as "text" | "tool", // This cast is safe because we check above
-                  content: event.content,
-                  taskDetail,
-                },
-              ]);
-            } else {
-              // Same event type as before, accumulate content
-              currentContent += event.content;
-
-              // Extract task detail for tool events
-              const taskDetail =
-                event.type === "tool"
-                  ? extractTaskDetail(currentContent)
-                  : undefined;
-
-              // Update the current step
-              setSteps((prev) =>
-                prev.map((step) =>
-                  step.id === currentStepId
-                    ? {
-                        ...step,
-                        content: currentContent,
-                        ...(event.type === "tool" ? { taskDetail } : {}),
-                      }
-                    : step
-                )
-              );
+        // Only process text and tool events for steps
+        if (event.type === "text" || event.type === "tool") {
+          // If the event type has changed or we don't have a current step,
+          // create a new step and reset the content
+          if (event.type !== lastEventType || !currentStepId) {
+            // If we have accumulated content, create a new step
+            if (currentContent && currentStepId) {
+              // We're switching to a new type, so finalize the current step
+              // (This is already handled by the state updates below)
             }
-          } else if (event.type === "complete") {
-            // Find the last text step that doesn't have a tool step after it
-            setTimeout(() => {
-              const textSteps = steps.filter((s) => s.type === "text");
-              if (textSteps.length > 0) {
-                const lastTextStep = textSteps[textSteps.length - 1];
-                setFinalResult(lastTextStep.content);
-              } else {
-                setFinalResult(event.content);
-              }
-              setIsProcessing(false);
-            }, 500);
+
+            // Create a new step for the new type
+            const newId = `${event.type}-${Date.now()}`;
+            currentStepId = newId;
+            currentContent = event.content;
+            lastEventType = event.type;
+
+            // Extract task detail for tool events
+            const taskDetail =
+              event.type === "tool"
+                ? extractTaskDetail(event.content)
+                : undefined;
+
+            // Add the new step (ensuring type is only 'text' or 'tool')
+            setSteps((prev) => [
+              ...prev,
+              {
+                id: newId,
+                type: event.type as "text" | "tool", // This cast is safe because we check above
+                content: event.content,
+                taskDetail,
+              },
+            ]);
+          } else {
+            // Same event type as before, accumulate content
+            currentContent += event.content;
+
+            // Extract task detail for tool events
+            const taskDetail =
+              event.type === "tool"
+                ? extractTaskDetail(currentContent)
+                : undefined;
+
+            // Update the current step
+            setSteps((prev) =>
+              prev.map((step) =>
+                step.id === currentStepId
+                  ? {
+                      ...step,
+                      content: currentContent,
+                      ...(event.type === "tool" ? { taskDetail } : {}),
+                    }
+                  : step
+              )
+            );
           }
+        } else if (event.type === "complete") {
+          // Find the last text step that doesn't have a tool step after it
+          setTimeout(() => {
+            const textSteps = steps.filter((s) => s.type === "text");
+            if (textSteps.length > 0) {
+              const lastTextStep = textSteps[textSteps.length - 1];
+              setFinalResult(lastTextStep.content);
+            } else {
+              setFinalResult(event.content);
+            }
+            setIsProcessing(false);
+          }, 500);
         }
-      );
+      };
+
+      // Call the appropriate compliance API based on media type
+      if (isVideo) {
+        if (videoUrl) {
+          // Process video URL
+          await checkVideoCompliance(
+            videoUrl,
+            true, // isUrl = true
+            "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice.",
+            authToken,
+            handleComplianceEvent,
+            ["visual"]
+          );
+        } else if (selectedFile) {
+          // Currently not supported by the backend, but we'll add the UI for future implementation
+          console.error("File-based video uploads are not yet supported");
+          setSteps((prev) => [
+            ...prev,
+            {
+              id: `error-${Date.now()}`,
+              type: "text",
+              content:
+                "Error: File-based video uploads are not yet supported. Please use a YouTube URL instead.",
+            },
+          ]);
+          setIsProcessing(false);
+        }
+      } else {
+        // Process image
+        await checkImageCompliance(
+          selectedFile!,
+          "Analyze this image for brand compliance.",
+          authToken,
+          handleComplianceEvent
+        );
+      }
     } catch (error) {
       console.error("Error processing image for compliance:", error);
       setSteps((prev) => [
@@ -227,6 +314,12 @@ export default function App() {
         },
       ]);
       setIsProcessing(false);
+    } finally {
+      // Clear timer interval
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
     }
   };
 
@@ -240,37 +333,40 @@ export default function App() {
 
   // Custom components for markdown rendering
   const MarkdownComponents = {
-    h1: ({ node, ...props }: any) => (
+    h1: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
       <h1 className="text-2xl font-semibold mt-6 mb-4 text-white" {...props} />
     ),
-    h2: ({ node, ...props }: any) => (
+    h2: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
       <h2 className="text-xl font-semibold mt-5 mb-3 text-white" {...props} />
     ),
-    h3: ({ node, ...props }: any) => (
+    h3: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
       <h3 className="text-lg font-medium mt-4 mb-2 text-white" {...props} />
     ),
-    h4: ({ node, ...props }: any) => (
+    h4: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
       <h4 className="text-base font-medium mt-3 mb-2 text-white" {...props} />
     ),
-    p: ({ node, ...props }: any) => (
+    p: (props: React.HTMLAttributes<HTMLParagraphElement>) => (
       <p className="text-sm leading-relaxed my-3 text-zinc-300" {...props} />
     ),
-    ul: ({ node, ...props }: any) => (
+    ul: (props: React.HTMLAttributes<HTMLUListElement>) => (
       <ul className="list-disc pl-6 my-3 text-zinc-300" {...props} />
     ),
-    ol: ({ node, ...props }: any) => (
+    ol: (props: React.HTMLAttributes<HTMLOListElement>) => (
       <ol className="list-decimal pl-6 my-3 text-zinc-300" {...props} />
     ),
-    li: ({ node, ...props }: any) => (
+    li: (props: React.HTMLAttributes<HTMLLIElement>) => (
       <li className="text-sm my-1 leading-relaxed" {...props} />
     ),
-    blockquote: ({ node, ...props }: any) => (
+    blockquote: (props: React.HTMLAttributes<HTMLQuoteElement>) => (
       <blockquote
         className="border-l-2 border-zinc-700 pl-4 my-3 italic text-zinc-400"
         {...props}
       />
     ),
-    code: ({ node, inline, ...props }: any) =>
+    code: ({
+      inline,
+      ...props
+    }: { inline?: boolean } & React.HTMLAttributes<HTMLElement>) =>
       inline ? (
         <code
           className="bg-zinc-800 px-1 py-0.5 rounded text-xs font-mono text-zinc-300"
@@ -282,19 +378,19 @@ export default function App() {
           {...props}
         />
       ),
-    a: ({ node, ...props }: any) => (
+    a: (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
       <a
         className="text-white underline hover:text-zinc-300 transition-colors"
         {...props}
       />
     ),
-    strong: ({ node, ...props }: any) => (
+    strong: (props: React.HTMLAttributes<HTMLElement>) => (
       <strong className="font-semibold text-white" {...props} />
     ),
-    em: ({ node, ...props }: any) => (
+    em: (props: React.HTMLAttributes<HTMLElement>) => (
       <em className="italic text-zinc-300" {...props} />
     ),
-    hr: ({ node, ...props }: any) => (
+    hr: (props: React.HTMLAttributes<HTMLHRElement>) => (
       <hr className="my-4 border-zinc-800" {...props} />
     ),
   };
@@ -304,22 +400,30 @@ export default function App() {
       {/* Header bar */}
       <header className="border-b border-zinc-800 py-3 px-4 sticky top-0 z-10 bg-zinc-950 backdrop-blur-sm bg-opacity-90">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center shadow-md shadow-indigo-900/30">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-3 w-3 text-white"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                  clipRule="evenodd"
-                />
-              </svg>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center shadow-md shadow-indigo-900/30">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-3 w-3 text-white"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+              <p className="text-lg font-medium">Brand Compliance</p>
             </div>
-            <p className="text-lg font-medium">Brand Compliance</p>
+            <UploadGuidelinesModal
+              onUploadComplete={() => {
+                // Optionally refresh guidelines list
+              }}
+              authToken={authToken}
+            />
           </div>
           {steps.length > 0 && (
             <button
@@ -348,7 +452,7 @@ export default function App() {
 
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6">
         {/* Initial upload view - shown when no image is selected or no results yet */}
-        {(!imagePreview || (steps.length === 0 && !finalResult)) && (
+        {steps.length === 0 && !finalResult && (
           <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto py-10 space-y-8 animate-in enhanced-fade-in duration-500">
             <div className="text-center space-y-2">
               <h2 className="text-xl font-semibold bg-gradient-to-r from-white to-indigo-300 bg-clip-text text-transparent">
@@ -361,39 +465,48 @@ export default function App() {
 
             <FileUpload
               onFileSelect={handleFileSelect}
+              onUrlSubmit={handleUrlSubmit}
               maxSize={10}
               acceptedFileTypes={[
                 "image/jpeg",
                 "image/png",
                 "image/gif",
                 "image/webp",
+                "video/mp4",
+                "video/webm",
+                "video/quicktime",
               ]}
+              allowUrls={true}
               multiple={false}
               className="w-full"
             />
 
-            {imagePreview && (
+            {filePreview && (
               <div className="border border-zinc-700 rounded-lg overflow-hidden w-full shadow-lg shadow-black/20 hover-lift">
-                <img
-                  src={imagePreview}
-                  alt="Selected"
-                  className="w-full h-auto"
-                />
+                {isVideo ? (
+                  <video src={filePreview} controls className="w-full h-auto" />
+                ) : (
+                  <img
+                    src={filePreview}
+                    alt="Selected"
+                    className="w-full h-auto"
+                  />
+                )}
                 <div className="p-3 bg-zinc-800 flex justify-between items-center">
                   <div>
                     <p className="text-sm font-medium truncate max-w-[200px] text-white">
-                      {selectedImage?.name}
+                      {selectedFile?.name}
                     </p>
                     <p className="text-xs text-zinc-400">
-                      {selectedImage &&
-                        (selectedImage.size / (1024 * 1024)).toFixed(2)}{" "}
+                      {selectedFile &&
+                        (selectedFile.size / (1024 * 1024)).toFixed(2)}{" "}
                       MB
                     </p>
                   </div>
                   <Button
                     onClick={() => {
-                      setSelectedImage(null);
-                      setImagePreview(null);
+                      setSelectedFile(null);
+                      setFilePreview(null);
                     }}
                     variant="ghost"
                     size="sm"
@@ -416,9 +529,44 @@ export default function App() {
               </div>
             )}
 
+            {videoUrl && !filePreview && (
+              <div className="border border-zinc-700 rounded-lg overflow-hidden w-full shadow-lg shadow-black/20 hover-lift">
+                <div className="p-4 bg-zinc-800 flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5 text-red-500"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                    </svg>
+                    <p className="text-sm font-medium text-white">
+                      YouTube Video
+                    </p>
+                  </div>
+                  <p className="text-xs text-zinc-300 break-all">{videoUrl}</p>
+                  <Button
+                    onClick={() => {
+                      setVideoUrl(null);
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 text-xs border-zinc-700 hover:bg-zinc-700"
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* This FileUpload component is already included at the top of the form */}
+
             <Button
-              onClick={processImage}
-              disabled={!selectedImage || isProcessing || !authToken}
+              onClick={processMedia}
+              disabled={
+                (!selectedFile && !videoUrl) || isProcessing || !authToken
+              }
               className="w-full bg-indigo-600 hover:bg-indigo-500 text-white transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none shadow-lg shadow-indigo-900/30 hover:shadow-xl hover:shadow-indigo-900/40 hover:translate-y-[-1px] press-effect"
             >
               {isProcessing ? (
@@ -455,31 +603,77 @@ export default function App() {
         {/* Results view - shown when there are results */}
         {(steps.length > 0 || finalResult) && (
           <div className="flex flex-col space-y-4 animate-in enhanced-fade-in duration-400">
-            {/* Image attachment */}
-            {imagePreview && (
+            {/* Media attachment */}
+            {(filePreview || videoUrl) && (
               <div className="flex items-start gap-3 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 mb-2 shadow-md animate-in smooth-slide-up duration-400">
-                <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md">
-                  <img
-                    src={imagePreview}
-                    alt="Selected"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+                {filePreview ? (
+                  <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md">
+                    {isVideo ? (
+                      <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-6 w-6 text-indigo-400"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                        >
+                          <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                        </svg>
+                      </div>
+                    ) : (
+                      <img
+                        src={filePreview}
+                        alt="Selected"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md bg-zinc-900 flex items-center justify-center">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-6 w-6 text-red-500"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                    </svg>
+                  </div>
+                )}
                 <div className="flex-1 min-w-0 flex flex-col">
-                  <h2 className="text-sm font-medium truncate text-white">
-                    {selectedImage?.name}
-                  </h2>
-                  <p className="text-xs text-zinc-400 mb-1">
-                    {selectedImage &&
-                      (selectedImage.size / (1024 * 1024)).toFixed(2)}{" "}
-                    MB
-                  </p>
-                  <div className="flex items-center">
+                  {filePreview ? (
+                    <>
+                      <h2 className="text-sm font-medium truncate text-white">
+                        {selectedFile?.name}
+                      </h2>
+                      <p className="text-xs text-zinc-400 mb-1">
+                        {selectedFile &&
+                          (selectedFile.size / (1024 * 1024)).toFixed(2)}{" "}
+                        MB
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <h2 className="text-sm font-medium truncate text-white">
+                        YouTube Video
+                      </h2>
+                      <p className="text-xs text-zinc-400 mb-1 truncate">
+                        {videoUrl}
+                      </p>
+                    </>
+                  )}
+                  <div className="flex items-center gap-3">
                     {isProcessing ? (
-                      <span className="inline-flex items-center text-xs text-zinc-300">
-                        <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mr-1.5 animate-subtle-pulse"></span>
-                        Processing...
-                      </span>
+                      <>
+                        <span className="inline-flex items-center text-xs text-zinc-300">
+                          <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mr-1.5 animate-subtle-pulse"></span>
+                          Processing...
+                        </span>
+                        {isVideo && elapsedTime > 0 && (
+                          <span className="text-xs text-zinc-400">
+                            {formatTime(elapsedTime)}
+                          </span>
+                        )}
+                      </>
                     ) : (
                       <span className="inline-flex items-center text-xs text-zinc-300">
                         <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-glow"></span>
@@ -493,8 +687,9 @@ export default function App() {
                     onClick={() => {
                       setSteps([]);
                       setFinalResult(null);
-                      setSelectedImage(null);
-                      setImagePreview(null);
+                      setSelectedFile(null);
+                      setFilePreview(null);
+                      setVideoUrl(null);
                     }}
                     variant="outline"
                     size="sm"
@@ -713,11 +908,50 @@ export default function App() {
                   <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-glow"></span>
                   Final Analysis
                 </h3>
-                <div className="prose prose-invert max-w-none pre-line">
+                {steps[steps.length - 1].content &&
+                typeof steps[steps.length - 1].content === "string" ? (
+                  JSON.parse(steps[steps.length - 1].content).result ? (
+                    <ReactMarkdown components={MarkdownComponents}>
+                      {JSON.parse(steps[steps.length - 1].content).result}
+                    </ReactMarkdown>
+                  ) : (
+                    <ReactMarkdown components={MarkdownComponents}>
+                      {(() => {
+                        try {
+                          const parsed = JSON.parse(
+                            steps[steps.length - 1].content
+                          );
+                          if (parsed.results) {
+                            return Object.entries(parsed.results)
+                              .map(([key, value]) => `${key}: ${value}`)
+                              .join("\n");
+                          }
+                          return (
+                            parsed.result || steps[steps.length - 1].content
+                          );
+                        } catch {
+                          return steps[steps.length - 1].content;
+                        }
+                      })()}
+                    </ReactMarkdown>
+                  )
+                ) : (
                   <ReactMarkdown components={MarkdownComponents}>
-                    {JSON.parse(steps[steps.length - 1].content).result}
+                    {(() => {
+                      try {
+                        const parsed = JSON.parse(finalResult);
+                        if (parsed.results) {
+                          return Object.entries(parsed.results)
+                            .map(([key, value]) => `${key}: ${value}`)
+                            .join("\n");
+                        }
+                        return parsed.result || finalResult;
+                      } catch {
+                        return finalResult;
+                      }
+                    })()}
                   </ReactMarkdown>
-                </div>
+                )}
               </div>
             )}
           </div>

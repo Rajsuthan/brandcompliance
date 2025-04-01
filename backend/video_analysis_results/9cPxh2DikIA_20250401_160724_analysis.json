@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://www.youtube.com/watch?v=9cPxh2DikIA",
+    "video_id": "9cPxh2DikIA",
+    "analysis_timestamp": "20250401_160724",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 51,
+    "video_duration_seconds": 30,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice."
+  },
+  "results": {
+    "visual": "## Compliance Analysis for Video: Burger King Whopper Commercial\n\n### Executive Summary\n\nThis video exhibits **\u26a0\ufe0f Partially Compliant** status with Burger King's brand guidelines. Predominantly, the color palette aligns with the brand's primary colors, but the lack of identified fonts and logo in use prevents full evaluation.\n\n### Methodology\n\nI analyzed the video with specific focus on color usage. I used frame analysis to identify predominant colors at specific timestamps and cross-referenced these with the official Burger King brand guidelines, particularly page 61 detailing the brand's color palette.\n\n### Frame-by-Frame Analysis\n\n#### Color Palette (Timestamp: 28)\n- The dominant color #7f472e is close to BBQ Brown.\n- However, without the exact hex code identified in the frame, the use of #7f472e can only be stated as \"close to BBQ Brown\" and is therefore a potential deviation.\n\n#### Fonts\n- While identified in timestamps 4 and 40, the fonts used are unknown making it impossible to ensure compliance with the \"Flame\" typeface family, which is mandatory as stated on page 67 of the guidelines.\n\n### Brand Guideline Compliance\n\n1. **Color Palette**\n   - **Finding**: \u26a0\ufe0f Partially Compliant\n   - **Evidence**: Predominant colors are closely related to but not an exact match to the official color palette.\n   - **Guideline Reference**: Burger King Brand Guidelines, Page 61.\n   - **Severity**: Low - Secondary colors have minor deviations.\n\n2. **Typography**\n   - **Finding**: \u274c Non-Compliant\n   - **Evidence**: Fonts are not identified; making it impossible to determine font compliance.\n   - **Guideline Reference**: Burger King Brand Guidelines, Page 67.\n   - **Severity**: High - The \"Flame\" typeface family must be used to maintain brand consistency.\n\n3. **Logo Usage**\n   - **Finding**: \u26a0\ufe0f Unclear\n   - **Evidence**: The logo is not visible in timestamps 4 or 40. A lack of visibility across timestamps prevents ensuring that it is being used correctly.\n   - **Guideline Reference**: Burger King Brand Guidelines, Pages 31-50.\n   - **Severity**: High - Failure to use the logo correctly leads to brand confusion.\n\n### Remediation Recommendations\n\n1. **Critical Fixes Required**:\n   - Identify the fonts used and ensure compliance with the official \"Flame\" typeface family.\n   - Verify the colors against the official hex codes and correct any deviations.\n\n2. **Secondary Improvements**:\n   - Ensure all frames contain the logo and that logo usage complies with guidelines on pages 31-50.\n\nThis commercial requires revisions before it can be fully approved for public release. The use of an unidentified font is a serious deviation from Burger King's brand standards."
+  }
+}
