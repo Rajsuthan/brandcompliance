@@ -24,9 +24,10 @@ try:
     print(f"✅ Successfully accessed database: {DB_NAME}")
 except Exception as e:
     print(f"❌ Error connecting to MongoDB: {e}")
-    # Create a mock client and database for fallback
+    # Set db to None and re-raise the exception to halt startup if DB connection fails
     client = None
     db = None
+    raise e
 
 # Collections
 users_collection = db.users
