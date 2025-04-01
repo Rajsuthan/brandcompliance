@@ -1,7 +1,7 @@
 // API service for compliance-related operations
 
 // Base URL for the API
-const API_BASE_URL = "http://localhost:8001";
+const API_BASE_URL = "https://brandcompliance.onrender.com";
 
 // Interface for authentication response
 interface AuthResponse {
