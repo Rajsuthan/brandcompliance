@@ -234,6 +234,7 @@ export default function App() {
   const toggleStepsCollapse = () => {
     // When user manually toggles, disable auto-collapse
     setAllowAutoCollapse(false);
+    console.log(allowAutoCollapse);
     setStepsCollapsed(!stepsCollapsed);
   };
 
