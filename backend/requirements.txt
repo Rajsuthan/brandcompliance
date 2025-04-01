@@ -10,6 +10,7 @@ pydantic==2.4.2
 pypdfium2==4.0.0
 PyMuPDF==1.23.0
 Pillow==10.0.0
+gunicorn==23.0.0
 
 # Video agent dependencies
 google-cloud-aiplatform>=1.36.0
