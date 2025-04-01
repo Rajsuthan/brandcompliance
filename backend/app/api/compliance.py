@@ -12,6 +12,7 @@ from fastapi import (
     File,
     Form,
     Body,
+    Request,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -170,9 +171,14 @@ async def process_image_and_stream(
 
 
 @router.post("/compliance/check-video")
+@router.get("/compliance/check-video")
 async def check_video_compliance(
-    data: Dict[str, Any] = Body(...),
+    request: Request,
+    data: Dict[str, Any] = Body(None),
     current_user: dict = Depends(get_current_user),
+    video_url: str = None,
+    message: str = None,
+    analysis_modes: str = None,
 ):
     """
     Check a video for brand compliance using its URL.
@@ -182,10 +188,30 @@ async def check_video_compliance(
     2. Processes the video using the video compliance agent
     3. Streams the results back to the client
     """
-    # Extract data from request
-    video_url = data.get("video_url")
-    message = data.get("message", "Analyze this video for brand compliance.")
-    analysis_modes = data.get("analysis_modes", ["visual", "brand_voice", "tone"])
+    # Handle both GET and POST methods
+    if request.method == "GET":
+        if not video_url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Video URL is required for GET request",
+            )
+        # Set defaults for GET request
+        message = message or "Analyze this video for brand compliance."
+        analysis_modes = (
+            analysis_modes.split(",")
+            if analysis_modes
+            else ["visual", "brand_voice", "tone"]
+        )
+    else:
+        # POST method - extract from body
+        if not data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Request body is required for POST request",
+            )
+        video_url = data.get("video_url")
+        message = data.get("message", "Analyze this video for brand compliance.")
+        analysis_modes = data.get("analysis_modes", ["visual", "brand_voice", "tone"])
 
     # Validate input
     if not video_url:

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import sys
 import os
+import shutil  # Added for directory cleanup
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -34,59 +35,62 @@ import yt_dlp
 import aiohttp
 
 
-async def download_direct_video(url):
-    """Download a video directly using aiohttp."""
-    print(f"🎬 Attempting direct download from {url}")
-
+async def validate_video_file(file_path):
+    """Validate a video file using OpenCV."""
     try:
-        # Create a temporary file to store the video
-        fd, video_path = tempfile.mkstemp(suffix=".mp4")
-        os.close(fd)
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            return False, "Could not open video file"
 
-        # Download the video using aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    raise Exception(f"Failed to download video: HTTP {response.status}")
+        # Try to read the first frame
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            cap.release()
+            return False, "Could not read video frame"
 
-                with open(video_path, "wb") as f:
-                    while True:
-                        chunk = await response.content.read(8192)
-                        if not chunk:
-                            break
-                        f.write(chunk)
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        print(f"✅ Video directly downloaded to {video_path}")
-        return video_path
+        # Basic validation
+        if fps <= 0 or frame_count <= 0:
+            cap.release()
+            return False, "Invalid video properties"
+
+        cap.release()
+        return True, None
     except Exception as e:
-        print(f"❌ Error in direct download: {str(e)}")
-        raise e
+        print("error")
+        return False, str(e)
 
 
-async def download_video(url):
-    """Download a video from a URL and return the local file path."""
-    print(f"🎬 Downloading video from {url}")
+async def download_youtube_video(url, temp_dir):
+    """Download a video from YouTube using yt-dlp."""
+    try:
+        ydl_opts = {
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",  # More flexible format selection
+            "outtmpl": os.path.join(temp_dir, "%(title)s.%(ext)s"),
+            "quiet": True,
+            # Enhanced download options
+            "no_warnings": True,
+            "no_color": True,
+            "retries": 10,  # Retry on network errors
+            "fragment_retries": 10,
+            "ignoreerrors": True,  # Skip unavailable videos
+            "socket_timeout": 30,  # Increase timeout
+            "extractor_retries": 3,  # Retry extractor on failure
+            "file_access_retries": 3,  # Retry file access
+            # Additional options to bypass restrictions
+            "nocheckcertificate": True,
+            "extract_flat": "in_playlist",
+            "youtube_include_dash_manifest": False,
+            # User agent to avoid bot detection
+            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
 
-    if "youtube.com" in url or "youtu.be" in url:
-        # Create a temporary directory to store the video
-        temp_dir = tempfile.mkdtemp()
-        try:
-            # Download YouTube video using yt-dlp
-            ydl_opts = {
-                "format": "best[ext=mp4]",
-                "outtmpl": os.path.join(temp_dir, "%(title)s.%(ext)s"),
-                "quiet": True,
-                # Add cookie support from common browsers
-                "cookiesfrombrowser": ["chrome", "firefox", "safari"],
-                # Fallback options if browser cookies aren't available
-                "extract_flat": True,
-                "no_warnings": True,
-                "no_color": True,
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                video_path = ydl.prepare_filename(info)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_path = ydl.prepare_filename(info)
 
             # Verify the downloaded file exists and is not empty
             if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
@@ -102,46 +106,89 @@ async def download_video(url):
             else:
                 print("❌ Video file is missing or empty")
                 raise Exception("Video download failed")
-        except Exception as e:
-            print(f"❌ Error downloading YouTube video with yt-dlp: {str(e)}")
-            print("⚠️ Falling back to direct download method")
-            # Fall back to direct download method
-            return await download_direct_video(url)
-    else:
-        # For non-YouTube URLs
+
+    except Exception as e:
+        print(f"❌ Error downloading YouTube video: {str(e)}")
+        raise e
+
+
+async def download_direct_video(url):
+    """Download a video directly using aiohttp."""
+    print(f"🎬 Attempting direct download from {url}")
+
+    temp_file = None
+    try:
+        # Create a temporary file
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(temp_fd)
+        temp_file = temp_path
+
+        # Download the video with custom headers
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to download video: HTTP {response.status}")
+
+                # Get total size for progress tracking
+                total_size = int(response.headers.get("content-length", 0))
+                downloaded = 0
+
+                with open(temp_path, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size:
+                                progress = (downloaded / total_size) * 100
+                                print(f"📥 Download progress: {progress:.1f}%")
+
+        # Validate the downloaded file
+        print("🔍 Validating video file...")
+        is_valid, error = await validate_video_file(temp_path)
+        if not is_valid:
+            raise Exception(f"Invalid video file: {error}")
+
+        print(f"✅ Video successfully downloaded and validated: {temp_path}")
+        return temp_path
+
+    except Exception as e:
+        # Clean up temp file if it exists
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except:
+                pass
+        print(f"❌ Error in direct download: {str(e)}")
+        raise Exception(f"Video download failed: {str(e)}")
+
+
+async def download_video(url):
+    """Download a video from a URL and return the local file path."""
+    print(f"🎬 Downloading video from {url}")
+
+    if "youtube.com" in url or "youtu.be" in url:
+        # Create a temporary directory to store the video
+        temp_dir = tempfile.mkdtemp()
         try:
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-
-            # Create a temporary file to store the video
-            fd, video_path = tempfile.mkstemp(suffix=".mp4")
-            os.close(fd)
-
-            total_size = int(response.headers.get("content-length", 0))
-            block_size = 8192
-            wrote = 0
-
-            with open(video_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=block_size):
-                    wrote = wrote + len(chunk)
-                    f.write(chunk)
-
-            if total_size > 0 and wrote != total_size:
-                print("❌ Downloaded file size mismatch")
-                raise Exception("Incomplete download")
-
-            # Verify file integrity
-            test_cap = cv2.VideoCapture(video_path)
-            if test_cap.isOpened():
-                test_cap.release()
-                print(f"✅ Video downloaded and verified: {video_path}")
-                return video_path
-            else:
-                print("❌ Downloaded file is not a valid video")
-                raise Exception("Invalid video file format")
+            return await download_youtube_video(url, temp_dir)
         except Exception as e:
-            print(f"❌ Error downloading video: {str(e)}")
-            raise e
+            print(f"❌ Error downloading YouTube video: {str(e)}")
+            print("⚠️ Falling back to direct download method")
+            try:
+                return await download_direct_video(url)
+            except Exception as direct_e:
+                print(f"❌ Direct download also failed: {str(direct_e)}")
+                raise Exception("All download methods failed")
+    else:
+        # For non-YouTube URLs, use the direct download method
+        return await download_direct_video(url)
 
 
 def calculate_frame_similarity(frame1, frame2, threshold=0.8):
