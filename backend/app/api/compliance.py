@@ -187,22 +187,47 @@ async def check_video_compliance(
     message = data.get("message", "Analyze this video for brand compliance.")
     analysis_modes = data.get("analysis_modes", ["visual", "brand_voice", "tone"])
 
+    # Validate input
     if not video_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Video URL is required",
         )
 
-    # Create a streaming response
-    return StreamingResponse(
-        process_video_and_stream(
-            video_url=video_url,
-            message=message,
-            analysis_modes=analysis_modes,
-            user_id=current_user["id"],
-        ),
-        media_type="text/event-stream",
-    )
+    # Validate video URL format
+    if not (video_url.startswith("http://") or video_url.startswith("https://")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid video URL format. URL must start with http:// or https://",
+        )
+
+    # Validate analysis modes
+    valid_modes = ["visual", "brand_voice", "tone"]
+    invalid_modes = [mode for mode in analysis_modes if mode not in valid_modes]
+    if invalid_modes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid analysis modes: {', '.join(invalid_modes)}. Valid modes are: {', '.join(valid_modes)}",
+        )
+
+    try:
+        # Create a streaming response
+        return StreamingResponse(
+            process_video_and_stream(
+                video_url=video_url,
+                message=message,
+                analysis_modes=analysis_modes,
+                user_id=current_user["id"],
+            ),
+            media_type="text/event-stream",
+        )
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Error in check_video_compliance: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process video: {str(e)}",
+        )
 
 
 async def process_video_and_stream(
@@ -239,52 +264,98 @@ async def process_video_and_stream(
     )
 
     # Process the video in a separate task
-    processing_task = asyncio.create_task(
-        agent.generate(video_url, message, analysis_modes)
-    )
-
-    # Stream the results
     try:
-        while True:
-            try:
-                # Get data from the queue with a timeout
-                data = await asyncio.wait_for(queue.get(), timeout=1.0)
+        processing_task = asyncio.create_task(
+            agent.generate(video_url, message, analysis_modes)
+        )
 
-                # Filter out XML content from the data
-                if data["type"] == "text":
-                    # Check if the content contains XML tags
-                    content = data["content"]
-                    if not (content.strip().startswith("<") and ">" in content):
+        # Send initial status
+        yield "data: status:Starting video download and processing...\n\n"
+
+        # Stream the results
+        try:
+            while True:
+                try:
+                    # Get data from the queue with a timeout
+                    data = await asyncio.wait_for(queue.get(), timeout=1.0)
+
+                    # Filter out XML content from the data
+                    if data["type"] == "text":
+                        # Check if the content contains XML tags
+                        content = data["content"]
+                        if not (content.strip().startswith("<") and ">" in content):
+                            # Format as a server-sent event
+                            event_data = f"data: {data['type']}:{content}\n\n"
+                            yield event_data
+                    else:
                         # Format as a server-sent event
-                        event_data = f"data: {data['type']}:{content}\n\n"
+                        event_data = f"data: {data['type']}:{data['content']}\n\n"
                         yield event_data
-                else:
-                    # Format as a server-sent event
-                    event_data = f"data: {data['type']}:{data['content']}\n\n"
-                    yield event_data
 
-                # Mark the item as processed
-                queue.task_done()
-            except asyncio.TimeoutError:
-                # Check if the processing task is done
-                if processing_task.done():
-                    # Get the final result
-                    results = processing_task.result()
+                    # Mark the item as processed
+                    queue.task_done()
+                except asyncio.TimeoutError:
+                    # Check if the processing task is done
+                    if processing_task.done():
+                        try:
+                            # Get the final result
+                            results = processing_task.result()
 
-                    # Format the results as JSON
-                    final_response = json.dumps(
-                        {"results": results["results"], "filepath": results["filepath"]}
-                    )
+                            # Format the results as JSON
+                            final_response = json.dumps(
+                                {
+                                    "results": results["results"],
+                                    "filepath": results["filepath"],
+                                    "status": "success",
+                                }
+                            )
 
-                    # Send a completion event
-                    yield f"data: complete:{final_response}\n\n"
-                    break
-    except asyncio.CancelledError:
-        # Handle client disconnection
-        if not processing_task.done():
-            processing_task.cancel()
-        raise
+                            # Send a completion event
+                            yield f"data: complete:{final_response}\n\n"
+                            break
+                        except Exception as e:
+                            # Handle any errors in processing task
+                            error_response = json.dumps(
+                                {
+                                    "status": "error",
+                                    "error": str(e),
+                                    "detail": "Failed to process video results",
+                                }
+                            )
+                            yield f"data: error:{error_response}\n\n"
+                            break
+
+        except asyncio.CancelledError:
+            # Handle client disconnection
+            yield "data: status:Processing cancelled by client\n\n"
+            if not processing_task.done():
+                processing_task.cancel()
+            raise
+
+        except Exception as e:
+            # Handle any other streaming errors
+            error_response = json.dumps(
+                {
+                    "status": "error",
+                    "error": str(e),
+                    "detail": "Error during video processing stream",
+                }
+            )
+            yield f"data: error:{error_response}\n\n"
+
+    except Exception as e:
+        # Handle any errors in task creation or initial setup
+        error_response = json.dumps(
+            {
+                "status": "error",
+                "error": str(e),
+                "detail": "Failed to initialize video processing",
+            }
+        )
+        yield f"data: error:{error_response}\n\n"
+
     finally:
         # Ensure the processing task is cancelled if not done
-        if not processing_task.done():
+        if "processing_task" in locals() and not processing_task.done():
             processing_task.cancel()
+            yield "data: status:Cleanup completed\n\n"

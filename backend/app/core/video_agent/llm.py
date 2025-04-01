@@ -76,14 +76,32 @@ async def download_video(url):
                 "format": "best[ext=mp4]",
                 "outtmpl": os.path.join(temp_dir, "%(title)s.%(ext)s"),
                 "quiet": True,
+                # Add cookie support from common browsers
+                "cookiesfrombrowser": ["chrome", "firefox", "safari"],
+                # Fallback options if browser cookies aren't available
+                "extract_flat": True,
+                "no_warnings": True,
+                "no_color": True,
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 video_path = ydl.prepare_filename(info)
 
-            print(f"✅ YouTube video downloaded to {video_path}")
-            return video_path
+            # Verify the downloaded file exists and is not empty
+            if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                # Verify file integrity using OpenCV
+                test_cap = cv2.VideoCapture(video_path)
+                if test_cap.isOpened():
+                    test_cap.release()
+                    print(f"✅ YouTube video downloaded and verified: {video_path}")
+                    return video_path
+                else:
+                    print("❌ Downloaded file is not a valid video")
+                    raise Exception("Invalid video file format")
+            else:
+                print("❌ Video file is missing or empty")
+                raise Exception("Video download failed")
         except Exception as e:
             print(f"❌ Error downloading YouTube video with yt-dlp: {str(e)}")
             print("⚠️ Falling back to direct download method")
@@ -99,12 +117,28 @@ async def download_video(url):
             fd, video_path = tempfile.mkstemp(suffix=".mp4")
             os.close(fd)
 
+            total_size = int(response.headers.get("content-length", 0))
+            block_size = 8192
+            wrote = 0
+
             with open(video_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=block_size):
+                    wrote = wrote + len(chunk)
                     f.write(chunk)
 
-            print(f"✅ Video downloaded to {video_path}")
-            return video_path
+            if total_size > 0 and wrote != total_size:
+                print("❌ Downloaded file size mismatch")
+                raise Exception("Incomplete download")
+
+            # Verify file integrity
+            test_cap = cv2.VideoCapture(video_path)
+            if test_cap.isOpened():
+                test_cap.release()
+                print(f"✅ Video downloaded and verified: {video_path}")
+                return video_path
+            else:
+                print("❌ Downloaded file is not a valid video")
+                raise Exception("Invalid video file format")
         except Exception as e:
             print(f"❌ Error downloading video: {str(e)}")
             raise e
