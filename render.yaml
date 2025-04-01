@@ -1,0 +1,24 @@
+services:
+  # Backend service
+  - type: web
+    name: compliance-backend
+    runtime: python3.9
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && gunicorn -c gunicorn_config.py main:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+    autoDeploy: true
+    healthCheckPath: /
+    timeoutSeconds: 600 # 10 minutes
+
+  # Frontend service
+  - type: web
+    name: compliance-frontend
+    runtime: node
+    buildCommand: cd ui && npm install && npm run build
+    startCommand: cd ui && npm run preview
+    envVars:
+      - key: NODE_VERSION
+        value: 18.0.0
+    autoDeploy: true
