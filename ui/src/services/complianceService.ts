@@ -231,9 +231,6 @@ export const checkVideoCompliance = (
         );
 
         // Close the event source when the component unmounts
-        const cleanup = () => {
-          eventSource.close();
-        };
 
         // Set up event listeners
         eventSource.onmessage = (event) => {

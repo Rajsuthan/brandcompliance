@@ -1,4 +1,3 @@
-import * as React from "react";
 import { useState } from "react";
 import { FileUpload } from "./file-upload";
 import { Button } from "./button";
