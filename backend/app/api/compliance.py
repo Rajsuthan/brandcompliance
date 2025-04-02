@@ -19,11 +19,13 @@ from fastapi.responses import StreamingResponse
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
 import asyncio
+from pydantic import BaseModel
 
 from app.core.auth import get_current_user
 from app.core.agent.index import Agent, encode_image_to_base64
 from app.core.agent.prompt import system_prompt, gemini_system_prompt
 from app.core.video_agent.video_agent_class import VideoAgent
+from app.db.database import create_feedback, get_user_feedback
 
 router = APIRouter()
 
@@ -109,13 +111,38 @@ async def process_image_and_stream(
     async def on_stream(data: Dict[str, Any]):
         await queue.put(data)
 
+    # Get user feedback to include in the system prompt
+    user_feedback_list = get_user_feedback(user_id)
+
+    # Prepare custom system prompt with user feedback if available
+    custom_system_prompt = system_prompt
+    if user_feedback_list and len(user_feedback_list) > 0:
+        print(
+            f"\n🧠 [USER MEMORIES] Found {len(user_feedback_list)} feedback items for user {user_id}"
+        )
+
+        feedback_section = "\n\n<User Memories and Feedback> !IMPORTANT! \n This is feedback given by the user in previous compliance checks. You need to make sure to acknolwedge your knowledge of these feedback in your initial detailed plan and say that you will follow them \n"
+        for i, feedback in enumerate(user_feedback_list):
+            feedback_content = feedback["content"]
+            feedback_date = feedback["created_at"]
+            feedback_section += (
+                f"- Memory {i+1} ({feedback_date}): {feedback_content}\n"
+            )
+            print(f"🧠 [MEMORY {i+1}] {feedback_content}")
+
+        # Add feedback section to system prompt
+        custom_system_prompt = system_prompt + feedback_section
+        print(f"🧠 [SYSTEM PROMPT] Added user memories to system prompt")
+    else:
+        print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")
+
     # Create an agent instance
     agent = Agent(
         model="claude-3-7-sonnet-20250219",
         on_stream=on_stream,
         user_id=user_id,
         message_id=message_id,
-        system_prompt=system_prompt,
+        system_prompt=custom_system_prompt,
     )
 
     # Create a dictionary with image data and text
@@ -385,3 +412,68 @@ async def process_video_and_stream(
         if "processing_task" in locals() and not processing_task.done():
             processing_task.cancel()
             yield "data: status:Cleanup completed\n\n"
+
+
+class FeedbackRequest(BaseModel):
+    content: str
+
+
+@router.post("/compliance/feedback")
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Submit user feedback for the compliance system.
+
+    This feedback will be stored in the database and used to improve the system.
+    It will be included in the system prompt for future compliance checks.
+
+    Args:
+        feedback: The feedback content
+        current_user: The authenticated user
+
+    Returns:
+        The ID of the created feedback record
+    """
+    try:
+        # Create feedback data
+        feedback_data = {
+            "user_id": current_user["id"],
+            "content": feedback.content,
+        }
+
+        # Store feedback in database
+        feedback_id = create_feedback(feedback_data)
+
+        return {"id": feedback_id, "status": "success"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to store feedback: {str(e)}",
+        )
+
+
+@router.get("/compliance/feedback")
+async def get_feedback(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get all feedback submitted by the current user.
+
+    Args:
+        current_user: The authenticated user
+
+    Returns:
+        List of feedback records
+    """
+    try:
+        # Get feedback from database
+        feedback_list = get_user_feedback(current_user["id"])
+
+        return {"feedback": feedback_list, "status": "success"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve feedback: {str(e)}",
+        )

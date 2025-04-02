@@ -33,6 +33,7 @@ except Exception as e:
 users_collection = db.users
 brand_guidelines_collection = db.brand_guidelines
 guideline_pages_collection = db.guideline_pages
+feedback_collection = db.feedback
 
 
 # Helper functions for database operations
@@ -146,3 +147,24 @@ def update_guideline_page_with_results(page_id, results):
 
     # Get and return the updated page
     return get_guideline_page(page_id)
+
+
+def create_feedback(feedback_data):
+    """Create a new user feedback record in the database"""
+    feedback_data["created_at"] = datetime.utcnow()
+    result = feedback_collection.insert_one(feedback_data)
+    return str(result.inserted_id)
+
+
+def get_user_feedback(user_id):
+    """Get all feedback for a specific user"""
+    from bson.objectid import ObjectId
+
+    cursor = feedback_collection.find({"user_id": user_id}).sort("created_at", -1)
+
+    feedback_list = []
+    for feedback in cursor:
+        feedback["id"] = str(feedback["_id"])
+        feedback_list.append(feedback)
+
+    return feedback_list

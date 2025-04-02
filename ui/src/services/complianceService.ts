@@ -1,7 +1,7 @@
 // API service for compliance-related operations
 
 // Base URL for the API
-export const API_BASE_URL = "https://brandcompliance.onrender.com";
+export const API_BASE_URL = "http://localhost:8001";
 
 // Interface for authentication response
 interface AuthResponse {
@@ -20,6 +20,26 @@ interface VideoComplianceRequest {
   video_url?: string;
   message?: string;
   analysis_modes?: string[];
+}
+
+// Interface for feedback response
+interface FeedbackResponse {
+  id: string;
+  status: string;
+}
+
+// Interface for feedback item
+interface FeedbackItem {
+  id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+}
+
+// Interface for get feedback response
+interface GetFeedbackResponse {
+  feedback: FeedbackItem[];
+  status: string;
 }
 
 /**
@@ -49,6 +69,64 @@ export const login = async (
     return data.access_token;
   } catch (error) {
     console.error("Login error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Submit user feedback for the compliance system
+ * @param content The feedback content
+ * @param token Authentication token
+ * @returns Promise with the feedback ID
+ */
+export const submitFeedback = async (
+  content: string,
+  token: string
+): Promise<string> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/compliance/feedback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status}`);
+    }
+
+    const data: FeedbackResponse = await response.json();
+    return data.id;
+  } catch (error) {
+    console.error("Submit feedback error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get all feedback submitted by the current user
+ * @param token Authentication token
+ * @returns Promise with the list of feedback items
+ */
+export const getFeedback = async (token: string): Promise<FeedbackItem[]> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/compliance/feedback`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status}`);
+    }
+
+    const data: GetFeedbackResponse = await response.json();
+    return data.feedback;
+  } catch (error) {
+    console.error("Get feedback error:", error);
     throw error;
   }
 };

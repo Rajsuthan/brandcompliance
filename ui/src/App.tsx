@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { FileUpload } from "@/components/ui/file-upload";
 import { Button } from "@/components/ui/button";
 import { UploadGuidelinesModal } from "@/components/ui/upload-guidelines-modal";
+import { FeedbackForm } from "@/components/ui/feedback-form";
 import "@/animations.css";
 import {
   login,
@@ -902,7 +903,7 @@ export default function App() {
             {finalResult && (
               <div
                 ref={finalResultRef}
-                className="rounded-md animate-in enhanced-fade-in smooth-slide-up duration-700 mt-8 pb-24"
+                className="rounded-md animate-in enhanced-fade-in smooth-slide-up duration-700 mt-8"
               >
                 <h3 className="text-xl font-semibold mb-4 flex items-center gap-2 pb-3 border-b border-zinc-800">
                   <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-glow"></span>
@@ -952,6 +953,16 @@ export default function App() {
                     })()}
                   </ReactMarkdown>
                 )}
+
+                {/* Feedback Form */}
+                <div className="mt-12 mb-24">
+                  <FeedbackForm
+                    authToken={authToken}
+                    onFeedbackSubmitted={() => {
+                      console.log("Feedback submitted successfully");
+                    }}
+                  />
+                </div>
               </div>
             )}
           </div>
