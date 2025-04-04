@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/b0421262-d242-419d-b0fd-902f89c3c722.mp4",
+    "video_id": "b0421262-d242-419d-b0fd-902f89c3c722.mp4",
+    "analysis_timestamp": "20250403_165400",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 52,
+    "video_duration_seconds": 30,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice."
+  },
+  "results": {
+    "visual": "## Compliance Analysis for Video: Burger King Commercial\n\n### Executive Summary\nThis video demonstrates **\u26a0\ufe0f Partially Compliant** with Burger King's brand guidelines. The video makes effective use of the brand's colors and overall \"mouthwatering\" design principles, but shows potential issues with typography.\n\n### Logo Usage\n- The video uses the \"Flame Grilling Since 1954\" lockup which is permitted based on page 56 of the brand guidelines.\n\n### Color Palette\n- The color scheme at timestamp 58 includes #845f4f, #7f4541, #c18759, and #c49979 which are generally in line with the BBQ Brown, Fiery Red, and Flaming Orange of the primary palette described on page 62.\n- The creamy colors such as #f0e9b5 and #f8e5a0, appear consistent with \"Mayo Egg White\".\n\n### Typography\n- At timestamp 58, the font is identified as \"Yeoman Jack Laser 2.\" This does **not** appear to be the required \"Flame\" typeface specified on page 67. Further investigation is needed to confirm if a different font has been used.\n\n### Tone of Voice\n- The video maintains a tone consistent with the \"Enthusiastic, Confident, Witty, and Approachable\" characteristics described on page 21. The close-up shots of ingredients, grilling, and the finished burger emphasize the mouthwatering design principle.\n\n### Recommendations\n\n1.  **Critical Fixes Required**:\n    *   Verify if the \"Yeoman Jack Laser 2\" font at timestamp 58 and other timestamps aligns with the \"Flame\" typeface and make corrections as necessary."
+  }
+}

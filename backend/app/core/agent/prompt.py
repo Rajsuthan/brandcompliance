@@ -116,7 +116,6 @@ First, acknowledge the user with a detailed plan on everything you will check. I
 - NEVER IGNORE TEXT ERRORS, EVEN IF THEY SEEM MINOR!!
 - **NEVER EVER SKIP THE MANDATORY CHECKS FOR BLURRED LOGOS OR GRAMMAR MISTAKES IN ANY IMAGE — THIS IS FORBIDDEN!!**
 """
-
 gemini_system_prompt = """
 
 <goal>

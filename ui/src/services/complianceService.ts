@@ -1,7 +1,7 @@
 // API service for compliance-related operations
 
 // Base URL for the API
-export const API_BASE_URL = "https://brandcompliance.onrender.com";
+export const API_BASE_URL = "http://localhost:8001";
 
 // Interface for authentication response
 interface AuthResponse {
@@ -20,6 +20,12 @@ interface VideoComplianceRequest {
   video_url?: string;
   message?: string;
   analysis_modes?: string[];
+}
+
+// Interface for video upload response
+interface VideoUploadResponse {
+  filename: string;
+  url: string | null;
 }
 
 // Interface for feedback response
@@ -250,6 +256,40 @@ export const checkImageCompliance = (
 };
 
 /**
+ * Upload a video file to Cloudflare R2 storage
+ * @param videoFile The video file to upload
+ * @param token Authentication token
+ * @returns Promise with the upload response containing filename and URL
+ */
+export const uploadVideoToR2 = async (
+  videoFile: File,
+  token: string
+): Promise<VideoUploadResponse> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", videoFile);
+
+    const response = await fetch(`${API_BASE_URL}/api/upload-video/`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Video upload failed: ${response.status}`);
+    }
+
+    const data: VideoUploadResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Video upload error:", error);
+    throw error;
+  }
+};
+
+/**
  * Check video compliance with streaming response
  * @param videoFile The video file to check or YouTube URL
  * @param isUrl Whether the provided input is a URL
@@ -267,110 +307,6 @@ export const checkVideoCompliance = (
   analysisModes: string[] = ["visual", "brand_voice", "tone"]
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
-    let requestBody: VideoComplianceRequest | FormData;
-    let contentType: string;
-
-    if (isUrl) {
-      // Handle URL-based video
-      requestBody = {
-        video_url: videoFile as string,
-        message: text,
-        analysis_modes: analysisModes,
-      };
-      contentType = "application/json";
-    } else {
-      // Handle file upload (for future implementation)
-      // Currently the backend only supports URL-based videos
-      reject(new Error("File-based video uploads are not yet supported"));
-      return;
-    }
-
-    // Create fetch request
-    const controller = new AbortController();
-    const { signal } = controller;
-
-    fetch(`${API_BASE_URL}/api/compliance/check-video`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": contentType,
-      },
-      body: isUrl ? JSON.stringify(requestBody) : (requestBody as FormData),
-      signal,
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`API request failed: ${response.status}`);
-        }
-
-        // Use the response directly as an event source
-        const eventSource = new EventSource(
-          `${API_BASE_URL}/api/compliance/check-video`
-        );
-
-        // Close the event source when the component unmounts
-
-        // Set up event listeners
-        eventSource.onmessage = (event) => {
-          const data = event.data;
-          processEventData(data, onEvent);
-        };
-
-        eventSource.onerror = (error) => {
-          console.error("EventSource error:", error);
-          eventSource.close();
-          reject(error);
-        };
-
-        // Set up event stream processing using ReadableStream
-        const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error("Response body is not readable");
-        }
-
-        // Process the stream
-        const processStream = async () => {
-          try {
-            let buffer = "";
-
-            while (true) {
-              const { done, value } = await reader.read();
-
-              if (done) {
-                // Process any remaining data in the buffer
-                if (buffer.trim()) {
-                  processEventData(buffer, onEvent);
-                }
-                break;
-              }
-
-              // Convert the chunk to text and add to buffer
-              const chunk = new TextDecoder().decode(value);
-              buffer += chunk;
-
-              // Process complete events in the buffer
-              const lines = buffer.split("\n\n");
-              buffer = lines.pop() || ""; // Keep the last incomplete chunk in the buffer
-
-              for (const line of lines) {
-                if (line.trim()) {
-                  processEventData(line, onEvent);
-                }
-              }
-            }
-
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        };
-
-        processStream();
-      })
-      .catch((error) => {
-        reject(error);
-      });
-
     // Helper function to process event data
     const processEventData = (
       data: string,
@@ -402,5 +338,113 @@ export const checkVideoCompliance = (
         resolve();
       }
     };
+
+    // Handle file upload first if needed
+    const prepareVideoSource = async (): Promise<VideoComplianceRequest> => {
+      if (isUrl) {
+        // Handle URL-based video
+        return {
+          video_url: videoFile as string,
+          message: text,
+          analysis_modes: analysisModes,
+        };
+      } else {
+        // Handle file upload by first uploading to R2
+        // First event to indicate upload is starting
+        onEvent({
+          type: "text",
+          content: "Uploading video to storage...",
+        });
+
+        try {
+          // Upload the video file to R2
+          const uploadResult = await uploadVideoToR2(videoFile as File, token);
+
+          // Notify about successful upload
+          onEvent({
+            type: "text",
+            content: "Video uploaded successfully. Starting analysis...",
+          });
+
+          // Return request body with the uploaded video URL
+          return {
+            video_url: uploadResult.url || uploadResult.filename,
+            message: text,
+            analysis_modes: analysisModes,
+          };
+        } catch (error) {
+          throw new Error(`Failed to upload video: ${error}`);
+        }
+      }
+    };
+
+    // Main execution flow
+    prepareVideoSource()
+      .then((requestBody) => {
+        const controller = new AbortController();
+        const { signal } = controller;
+
+        return fetch(`${API_BASE_URL}/api/compliance/check-video`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+          signal,
+        });
+      })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`API request failed: ${response.status}`);
+        }
+
+        // Set up event stream processing
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("Response body is not readable");
+        }
+
+        // Process the stream
+        const processStream = async () => {
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+              // Process any remaining data in the buffer
+              if (buffer.trim()) {
+                processEventData(buffer, onEvent);
+              }
+              break;
+            }
+
+            // Convert the chunk to text and add to buffer
+            const chunk = new TextDecoder().decode(value);
+            buffer += chunk;
+
+            // Process complete events in the buffer
+            const lines = buffer.split("\n\n");
+            buffer = lines.pop() || ""; // Keep the last incomplete chunk in the buffer
+
+            for (const line of lines) {
+              if (line.trim()) {
+                processEventData(line, onEvent);
+              }
+            }
+          }
+        };
+
+        return processStream();
+      })
+      .catch((error) => {
+        console.error("Video compliance check error:", error);
+        onEvent({
+          type: "text",
+          content: `Error: ${error.message}`,
+        });
+        reject(error);
+      });
   });
 };

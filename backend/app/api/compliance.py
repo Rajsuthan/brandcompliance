@@ -308,12 +308,38 @@ async def process_video_and_stream(
     async def on_stream(data: Dict[str, Any]):
         await queue.put(data)
 
+    # Get user feedback to include in the system prompt
+    user_feedback_list = get_user_feedback(user_id)
+
+    # Prepare custom system prompt with user feedback if available
+    custom_system_prompt = gemini_system_prompt
+    if user_feedback_list and len(user_feedback_list) > 0:
+        print(
+            f"\n🧠 [USER MEMORIES] Found {len(user_feedback_list)} feedback items for user {user_id}"
+        )
+
+        feedback_section = "\n\n<User Memories and Feedback> !IMPORTANT! \n This is feedback given by the user in previous compliance checks. You need to make sure to acknowledge your knowledge of these feedback in your initial detailed plan and say that you will follow them \n"
+        for i, feedback in enumerate(user_feedback_list):
+            feedback_content = feedback["content"]
+            feedback_date = feedback["created_at"]
+            feedback_section += (
+                f"- Memory {i+1} ({feedback_date}): {feedback_content}\n"
+            )
+            print(f"🧠 [MEMORY {i+1}] {feedback_content}")
+
+        # Add feedback section to system prompt
+        custom_system_prompt = gemini_system_prompt + feedback_section
+        print(f"🧠 [SYSTEM PROMPT] Added user memories to system prompt")
+    else:
+        print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")
+
     # Create a video agent instance
     agent = VideoAgent(
         model="gemini-2.0-flash",
         on_stream=on_stream,
         user_id=user_id,
         message_id=message_id,
+        system_prompt=custom_system_prompt,
     )
 
     # Process the video in a separate task

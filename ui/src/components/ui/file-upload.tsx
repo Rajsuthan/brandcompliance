@@ -7,24 +7,25 @@ interface FileUploadProps extends React.HTMLAttributes<HTMLDivElement> {
   maxSize?: number; // in MB
   acceptedFileTypes?: string[];
   multiple?: boolean;
-  allowUrls?: boolean; // Allow URL input instead of file upload
-  onUrlSubmit?: (url: string) => void; // Callback for URL submission
 }
 
 export function FileUpload({
   className,
   onFileSelect,
   maxSize = 10, // Default 10MB
-  acceptedFileTypes = ["image/jpeg", "image/png", "image/gif"],
+  acceptedFileTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+  ],
   multiple = false,
-  allowUrls = false,
-  onUrlSubmit,
   ...props
 }: FileUploadProps) {
   const [isDragging, setIsDragging] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [urlInput, setUrlInput] = React.useState("");
-  const [showUrlInput, setShowUrlInput] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
@@ -133,95 +134,41 @@ export function FileUpload({
           "group animate-in fade-in duration-500"
         )}
       >
-        {!showUrlInput ? (
-          <div className="flex flex-col items-center justify-center gap-4 text-center">
-            <div className="flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary animate-in zoom-in-50 duration-500 delay-200">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={1.5}
-                stroke="currentColor"
-                className="w-8 h-8"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-                />
-              </svg>
-            </div>
-            <div className="animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-300">
-              <h3 className="text-lg font-semibold">
-                Drag & Drop {multiple ? "your files" : "your file"} here
-              </h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                or click to browse files
-              </p>
-            </div>
-            <div className="flex gap-2 animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-400">
-              <Button onClick={handleButtonClick}>
-                Select {multiple ? "Files" : "File"}
-              </Button>
-
-              {allowUrls && (
-                <Button variant="outline" onClick={() => setShowUrlInput(true)}>
-                  Enter URL
-                </Button>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground mt-4 animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-500">
-              Supported formats:{" "}
-              {acceptedFileTypes.map((type) => type.split("/")[1]).join(", ")}
-              <br />
-              Max size: {maxSize}MB {multiple && "per file"}
+        <div className="flex flex-col items-center justify-center gap-4 text-center">
+          <div className="flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary animate-in zoom-in-50 duration-500 delay-200">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              className="w-8 h-8"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
+              />
+            </svg>
+          </div>
+          <div className="animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-300">
+            <h3 className="text-lg font-semibold">
+              Drag & Drop {multiple ? "your files" : "your file"} here
+            </h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              or click to browse files
             </p>
           </div>
-        ) : (
-          <div className="w-full max-w-md animate-in fade-in duration-300">
-            <h3 className="text-lg font-semibold text-center mb-4">
-              Enter Video URL
-            </h3>
-            <div className="flex flex-col gap-3">
-              <input
-                type="text"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className="w-full px-4 py-2 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => {
-                    if (urlInput && onUrlSubmit) {
-                      onUrlSubmit(urlInput);
-                      setShowUrlInput(false); // Hide URL input after submission
-                    } else {
-                      setError("Please enter a valid URL");
-                    }
-                  }}
-                  className="flex-1"
-                  disabled={!urlInput}
-                >
-                  Submit
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowUrlInput(false);
-                    setUrlInput("");
-                    setError(null);
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Enter a YouTube URL to analyze for brand compliance
-              </p>
-            </div>
+          <div className="flex gap-2 animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-400">
+            <Button onClick={handleButtonClick}>Select Image or Video</Button>
           </div>
-        )}
+          <p className="text-xs text-muted-foreground mt-4 animate-in fade-in-50 slide-in-from-bottom-4 duration-500 delay-500">
+            Supported formats:{" "}
+            {acceptedFileTypes.map((type) => type.split("/")[1]).join(", ")}
+            <br />
+            Max size: {maxSize}MB {multiple && "per file"}
+          </p>
+        </div>
 
         {/* Animated border effect */}
         <div className="absolute inset-0 rounded-xl overflow-hidden pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500">

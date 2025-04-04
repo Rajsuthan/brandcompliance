@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import shutil
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
 
@@ -70,7 +71,7 @@ class VideoAgent:
         self.frames = []
         self.video_path = None
         self.frame_captions = {"error": "Audio transcription disabled"}
-        
+
     async def container_on_stream(self, data: Dict[str, Any]):
         """Handle streaming data"""
         print(
@@ -110,7 +111,16 @@ class VideoAgent:
             ]
 
         # Download the video and extract frames
-        self.video_path = await download_video(video_url)
+        video_path_tuple = await download_video(video_url)
+        # Handle the tuple returned by download_video
+        if isinstance(video_path_tuple, tuple):
+            self.video_path = video_path_tuple[0]  # Extract just the path
+            temp_dir = video_path_tuple[1]  # Store the temp dir for cleanup
+        else:
+            # For backward compatibility if download_video is updated to return just a path
+            self.video_path = video_path_tuple
+            temp_dir = None
+
         self.frames = extract_frames(
             self.video_path, interval=1, similarity_threshold=0.8
         )
@@ -119,8 +129,12 @@ class VideoAgent:
         try:
             os.remove(self.video_path)
             print(f"🧹 Cleaned up temporary video file {self.video_path}")
+            # Also clean up temp directory if it exists
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                print(f"🧹 Cleaned up temporary directory {temp_dir}")
         except Exception as e:
-            print(f"⚠️ Could not remove temporary video file: {str(e)}")
+            print(f"⚠️ Could not remove temporary file or directory: {str(e)}")
 
         # Run each analysis mode in sequence
         for analysis_mode in analysis_modes:
@@ -298,10 +312,12 @@ class VideoAgent:
                     ):
                         print(f"📦 Chunk received: {chunk.text}")
                         final_text += chunk.text
-                        
+
                         # Send streaming event if callback is set
                         if self.on_stream:
-                            await self.on_stream({"type": "text", "content": chunk.text})
+                            await self.on_stream(
+                                {"type": "text", "content": chunk.text}
+                            )
 
                     # If we get here without exception, streaming was successful
                     streaming_successful = True
@@ -480,11 +496,15 @@ class VideoAgent:
 
                     # Send tool event if callback is set
                     if self.on_stream:
-                        await self.on_stream({"type": "tool", "content": json.dumps({
-                            "tool_name": json_tool_name,
-                            **tool_input
-                        })})
-                        
+                        await self.on_stream(
+                            {
+                                "type": "tool",
+                                "content": json.dumps(
+                                    {"tool_name": json_tool_name, **tool_input}
+                                ),
+                            }
+                        )
+
                     # Execute tool function
                     tool_function = get_tool_function(json_tool_name)
                     tool_result = await tool_function(tool_input)

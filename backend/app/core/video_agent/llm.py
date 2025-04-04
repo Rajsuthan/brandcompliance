@@ -222,6 +222,8 @@ async def download_video(url):
     Download a video from a URL.
     Returns a tuple: (video_path, temp_dir_to_clean)
     temp_dir_to_clean will be None for direct downloads.
+    
+    Note: This function always returns a tuple (path, temp_dir) for consistency.
     """
     print(f"🎬 Downloading video from {url}")
 

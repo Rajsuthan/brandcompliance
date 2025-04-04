@@ -26,7 +26,6 @@ interface Step {
 export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isVideo, setIsVideo] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -73,8 +72,8 @@ export default function App() {
 
   // Auto-collapse steps when final result is set
   useEffect(() => {
-    if (finalResult) {
-      // Always collapse steps when final result is ready
+    if (finalResult && allowAutoCollapse) {
+      // Only auto-collapse if allowed
       setStepsCollapsed(true);
 
       // Scroll to the final result
@@ -82,12 +81,9 @@ export default function App() {
         finalResultRef.current?.scrollIntoView({ behavior: "smooth" });
       }, 300);
     }
-  }, [finalResult]);
+  }, [finalResult, allowAutoCollapse]);
 
   const handleFileSelect = (file: File) => {
-    // Reset video URL if a file is selected
-    setVideoUrl(null);
-
     // Check if the file is a video or an image
     const isVideoFile = file.type.startsWith("video/");
     setIsVideo(isVideoFile);
@@ -99,22 +95,6 @@ export default function App() {
       setFilePreview(reader.result as string);
     };
     reader.readAsDataURL(file);
-
-    // Clear previous results
-    setSteps([]);
-    setFinalResult(null);
-    setStepsCollapsed(false);
-    setAllowAutoCollapse(true);
-  };
-
-  const handleUrlSubmit = (url: string) => {
-    // Reset selected file if a URL is submitted
-    setSelectedFile(null);
-    setFilePreview(null);
-
-    // Set video URL and mark as video
-    setVideoUrl(url);
-    setIsVideo(true);
 
     // Clear previous results
     setSteps([]);
@@ -151,8 +131,8 @@ export default function App() {
   };
 
   const processMedia = async () => {
-    if (!selectedFile && !videoUrl) {
-      console.error("No file or URL selected");
+    if (!selectedFile) {
+      console.error("No file selected");
       return;
     }
 
@@ -176,7 +156,7 @@ export default function App() {
     setAllowAutoCollapse(true);
 
     try {
-      const mediaName = selectedFile ? selectedFile.name : videoUrl;
+      const mediaName = selectedFile.name;
       console.log(`Processing ${isVideo ? "video" : "image"}:`, mediaName);
 
       // Add initial step
@@ -257,52 +237,46 @@ export default function App() {
         } else if (event.type === "complete") {
           // Find the last text step that doesn't have a tool step after it
           setTimeout(() => {
-            const textSteps = steps.filter((s) => s.type === "text");
-            if (textSteps.length > 0) {
-              const lastTextStep = textSteps[textSteps.length - 1];
-              setFinalResult(lastTextStep.content);
-            } else {
-              setFinalResult(event.content);
-            }
-            setIsProcessing(false);
+            setSteps((prev) => {
+              const textSteps = prev.filter((s) => s.type === "tool");
+              if (textSteps.length > 0) {
+                const lastTextStep = textSteps[textSteps.length - 1];
+                const parsedOutput = JSON.parse(lastTextStep.content);
+
+                if (parsedOutput.result) {
+                  setFinalResult(parsedOutput.result);
+                }
+              } else {
+                setFinalResult(event.content);
+              }
+              setIsProcessing(false);
+              return prev;
+            });
           }, 500);
         }
       };
 
       // Call the appropriate compliance API based on media type
-      if (isVideo) {
-        if (videoUrl) {
-          // Process video URL
+      if (selectedFile) {
+        if (isVideo) {
+          // Process video file
           await checkVideoCompliance(
-            videoUrl,
-            true, // isUrl = true
+            selectedFile,
+            false, // isUrl = false (file upload)
             "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice.",
             authToken,
             handleComplianceEvent,
             ["visual"]
           );
-        } else if (selectedFile) {
-          // Currently not supported by the backend, but we'll add the UI for future implementation
-          console.error("File-based video uploads are not yet supported");
-          setSteps((prev) => [
-            ...prev,
-            {
-              id: `error-${Date.now()}`,
-              type: "text",
-              content:
-                "Error: File-based video uploads are not yet supported. Please use a YouTube URL instead.",
-            },
-          ]);
-          setIsProcessing(false);
+        } else {
+          // Process image
+          await checkImageCompliance(
+            selectedFile,
+            "Analyze this image for brand compliance.",
+            authToken,
+            handleComplianceEvent
+          );
         }
-      } else {
-        // Process image
-        await checkImageCompliance(
-          selectedFile!,
-          "Analyze this image for brand compliance.",
-          authToken,
-          handleComplianceEvent
-        );
       }
     } catch (error) {
       console.error("Error processing image for compliance:", error);
@@ -328,7 +302,6 @@ export default function App() {
   const toggleStepsCollapse = () => {
     // When user manually toggles, disable auto-collapse
     setAllowAutoCollapse(false);
-    console.log(allowAutoCollapse);
     setStepsCollapsed(!stepsCollapsed);
   };
 
@@ -396,9 +369,12 @@ export default function App() {
     ),
   };
 
+  useEffect(() => {
+    console.log(steps);
+  }, []);
+
   return (
     <div className="flex flex-col min-h-svh bg-zinc-950 text-white antialiased">
-      {/* Header bar */}
       <header className="border-b border-zinc-800 py-3 px-4 sticky top-0 z-10 bg-zinc-950 backdrop-blur-sm bg-opacity-90">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -420,34 +396,10 @@ export default function App() {
               <p className="text-lg font-medium">Brand Compliance</p>
             </div>
             <UploadGuidelinesModal
-              onUploadComplete={() => {
-                // Optionally refresh guidelines list
-              }}
+              onUploadComplete={() => {}}
               authToken={authToken}
             />
           </div>
-          {steps.length > 0 && (
-            <button
-              onClick={toggleStepsCollapse}
-              className="text-xs text-zinc-300 flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 hover:bg-zinc-800 transition-all hover:shadow-md duration-200"
-            >
-              <span>{steps.length} steps</span>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className={`h-3 w-3 transition-transform duration-200 ${
-                  stepsCollapsed ? "rotate-180" : ""
-                }`}
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </button>
-          )}
         </div>
       </header>
 
@@ -460,13 +412,12 @@ export default function App() {
                 Brand Compliance Checker
               </h2>
               <p className="text-sm text-zinc-400">
-                Upload an image to check brand compliance
+                Upload an image or video to check brand compliance
               </p>
             </div>
 
             <FileUpload
               onFileSelect={handleFileSelect}
-              onUrlSubmit={handleUrlSubmit}
               maxSize={10}
               acceptedFileTypes={[
                 "image/jpeg",
@@ -477,7 +428,6 @@ export default function App() {
                 "video/webm",
                 "video/quicktime",
               ]}
-              allowUrls={true}
               multiple={false}
               className="w-full"
             />
@@ -530,44 +480,9 @@ export default function App() {
               </div>
             )}
 
-            {videoUrl && !filePreview && (
-              <div className="border border-zinc-700 rounded-lg overflow-hidden w-full shadow-lg shadow-black/20 hover-lift">
-                <div className="p-4 bg-zinc-800 flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5 text-red-500"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
-                    </svg>
-                    <p className="text-sm font-medium text-white">
-                      YouTube Video
-                    </p>
-                  </div>
-                  <p className="text-xs text-zinc-300 break-all">{videoUrl}</p>
-                  <Button
-                    onClick={() => {
-                      setVideoUrl(null);
-                    }}
-                    variant="outline"
-                    size="sm"
-                    className="mt-2 text-xs border-zinc-700 hover:bg-zinc-700"
-                  >
-                    Remove
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* This FileUpload component is already included at the top of the form */}
-
             <Button
               onClick={processMedia}
-              disabled={
-                (!selectedFile && !videoUrl) || isProcessing || !authToken
-              }
+              disabled={!selectedFile || isProcessing || !authToken}
               className="w-full bg-indigo-600 hover:bg-indigo-500 text-white transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none shadow-lg shadow-indigo-900/30 hover:shadow-xl hover:shadow-indigo-900/40 hover:translate-y-[-1px] press-effect"
             >
               {isProcessing ? (
@@ -605,68 +520,42 @@ export default function App() {
         {(steps.length > 0 || finalResult) && (
           <div className="flex flex-col space-y-4 animate-in enhanced-fade-in duration-400">
             {/* Media attachment */}
-            {(filePreview || videoUrl) && (
+            {filePreview && (
               <div className="flex items-start gap-3 p-4 border border-zinc-700 rounded-lg bg-zinc-800/50 mb-2 shadow-md animate-in smooth-slide-up duration-400">
-                {filePreview ? (
-                  <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md">
-                    {isVideo ? (
-                      <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-6 w-6 text-indigo-400"
-                          viewBox="0 0 20 20"
-                          fill="currentColor"
-                        >
-                          <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
-                        </svg>
-                      </div>
-                    ) : (
-                      <img
-                        src={filePreview}
-                        alt="Selected"
-                        className="w-full h-full object-cover"
-                      />
-                    )}
-                  </div>
-                ) : (
-                  <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md bg-zinc-900 flex items-center justify-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-6 w-6 text-red-500"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
-                    </svg>
-                  </div>
-                )}
-                <div className="flex-1 min-w-0 flex flex-col">
-                  {filePreview ? (
-                    <>
-                      <h2 className="text-sm font-medium truncate text-white">
-                        {selectedFile?.name}
-                      </h2>
-                      <p className="text-xs text-zinc-400 mb-1">
-                        {selectedFile &&
-                          (selectedFile.size / (1024 * 1024)).toFixed(2)}{" "}
-                        MB
-                      </p>
-                    </>
+                <div className="w-12 h-12 rounded-md overflow-hidden flex-shrink-0 border border-zinc-700 shadow-md">
+                  {isVideo ? (
+                    <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-6 w-6 text-indigo-400"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                      >
+                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                      </svg>
+                    </div>
                   ) : (
-                    <>
-                      <h2 className="text-sm font-medium truncate text-white">
-                        YouTube Video
-                      </h2>
-                      <p className="text-xs text-zinc-400 mb-1 truncate">
-                        {videoUrl}
-                      </p>
-                    </>
+                    <img
+                      src={filePreview}
+                      alt="Selected"
+                      className="w-full h-full object-cover"
+                    />
                   )}
+                </div>
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <h2 className="text-sm font-medium truncate text-white">
+                    {selectedFile?.name}
+                  </h2>
+                  <p className="text-xs text-zinc-400 mb-1">
+                    {selectedFile &&
+                      (selectedFile.size / (1024 * 1024)).toFixed(2)}{" "}
+                    MB
+                  </p>
                   <div className="flex items-center gap-3">
                     {isProcessing ? (
                       <>
                         <span className="inline-flex items-center text-xs text-zinc-300">
-                          <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mr-1.5 animate-subtle-pulse"></span>
+                          <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full mr-1.5 animate-pulse"></span>
                           Processing...
                         </span>
                         {isVideo && elapsedTime > 0 && (
@@ -677,7 +566,7 @@ export default function App() {
                       </>
                     ) : (
                       <span className="inline-flex items-center text-xs text-zinc-300">
-                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-glow"></span>
+                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5"></span>
                         Analysis complete
                       </span>
                     )}
@@ -690,11 +579,10 @@ export default function App() {
                       setFinalResult(null);
                       setSelectedFile(null);
                       setFilePreview(null);
-                      setVideoUrl(null);
                     }}
                     variant="outline"
                     size="sm"
-                    className="h-7 text-xs border-zinc-700 hover:bg-zinc-700 text-white transition-all duration-200 hover:shadow-md press-effect"
+                    className="h-7 text-xs border-zinc-700 hover:bg-zinc-700 text-white transition-all duration-200 hover:shadow-md"
                   >
                     New Analysis
                   </Button>
@@ -707,7 +595,7 @@ export default function App() {
               <div className="mb-1 mt-6">
                 <button
                   onClick={toggleStepsCollapse}
-                  className="w-full flex items-center justify-between p-3 border border-zinc-700 rounded-lg bg-zinc-800/70 mb-4 hover:bg-zinc-800 transition-all duration-200 shadow-md hover-lift"
+                  className="w-full flex items-center justify-between p-3 border border-zinc-700 rounded-lg bg-zinc-800/70 mb-4 hover:bg-zinc-800 transition-all duration-200 shadow-md"
                 >
                   <span className="text-sm font-medium text-white">
                     Processing Steps ({steps.length})
@@ -738,7 +626,7 @@ export default function App() {
                       {steps.map((step, index) => (
                         <div
                           key={step.id}
-                          className="animate-in smooth-slide-up duration-400"
+                          className="animate-in fade-in duration-400"
                           style={{ animationDelay: `${index * 80}ms` }}
                         >
                           <div className="flex items-start gap-3 group relative">
@@ -747,7 +635,7 @@ export default function App() {
                               <div
                                 className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-300 bg-zinc-800 text-lg shadow-md ${
                                   index === steps.length - 1 && !isProcessing
-                                    ? "animate-subtle-bounce !bg-green-700 !text-white"
+                                    ? "bg-green-700 text-white"
                                     : ""
                                 } ${step.taskDetail && "mt-5"}`}
                               >
@@ -818,7 +706,7 @@ export default function App() {
 
                             {/* Content card with hover effects */}
                             <div
-                              className={`flex-1 min-w-0 p-3.5 rounded-lg bg-zinc-700/20 border border-zinc-700 hover:border-zinc-600 group-hover:bg-zinc-800 mb-1 shadow-md transition-all duration-200 hover-lift ${
+                              className={`flex-1 min-w-0 p-3.5 rounded-lg bg-zinc-700/20 border border-zinc-700 hover:border-zinc-600 group-hover:bg-zinc-800 mb-1 shadow-md transition-all duration-200 ${
                                 index === steps.length - 1 && isProcessing
                                   ? "border-l-2 border-l-indigo-500"
                                   : ""
@@ -843,7 +731,7 @@ export default function App() {
                                 </div>
                               )}
                               <div
-                                className={` text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300 ${
+                                className={`text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300 ${
                                   step.taskDetail
                                     ? "font-semibold text-md"
                                     : "text-sm"
@@ -855,22 +743,6 @@ export default function App() {
                                   ? `${step.taskDetail}...`
                                   : "Processing..."}
                               </div>
-                              {step.content.length > 300 &&
-                                step.type === "text" && (
-                                  <button
-                                    className="text-xs mt-2 px-2 py-0.5 rounded bg-zinc-700 text-zinc-300 hover:text-white transition-colors press-effect"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      console.log(
-                                        "Full content:",
-                                        step.content
-                                      );
-                                      alert("Full content logged to console");
-                                    }}
-                                  >
-                                    Show full content
-                                  </button>
-                                )}
                             </div>
                           </div>
                         </div>
@@ -879,13 +751,13 @@ export default function App() {
                       {/* Loading indicator for active processing */}
                       {isProcessing && (
                         <div className="pl-8 py-2 text-xs text-zinc-300 flex items-center gap-2">
-                          <div className="w-1 h-1 bg-indigo-500 rounded-full animate-subtle-pulse"></div>
+                          <div className="w-1 h-1 bg-indigo-500 rounded-full animate-pulse"></div>
                           <div
-                            className="w-1 h-1 bg-indigo-500 rounded-full animate-subtle-pulse"
+                            className="w-1 h-1 bg-indigo-500 rounded-full animate-pulse"
                             style={{ animationDelay: "300ms" }}
                           ></div>
                           <div
-                            className="w-1 h-1 bg-indigo-500 rounded-full animate-subtle-pulse"
+                            className="w-1 h-1 bg-indigo-500 rounded-full animate-pulse"
                             style={{ animationDelay: "600ms" }}
                           ></div>
                         </div>
@@ -899,60 +771,35 @@ export default function App() {
               </div>
             )}
 
+            {/* {JSON.stringify(steps)} */}
+
             {/* Final Result Section */}
             {finalResult && (
               <div
                 ref={finalResultRef}
-                className="rounded-md animate-in enhanced-fade-in smooth-slide-up duration-700 mt-8"
+                className="rounded-md animate-in fade-in duration-700 mt-8 prose max-w-prose"
               >
                 <h3 className="text-xl font-semibold mb-4 flex items-center gap-2 pb-3 border-b border-zinc-800">
-                  <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-glow"></span>
+                  <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                   Final Analysis
                 </h3>
-                {steps[steps.length - 1].content &&
-                typeof steps[steps.length - 1].content === "string" ? (
-                  JSON.parse(steps[steps.length - 1].content).result ? (
-                    <ReactMarkdown components={MarkdownComponents}>
-                      {JSON.parse(steps[steps.length - 1].content).result}
-                    </ReactMarkdown>
-                  ) : (
-                    <ReactMarkdown components={MarkdownComponents}>
-                      {(() => {
-                        try {
-                          const parsed = JSON.parse(
-                            steps[steps.length - 1].content
-                          );
-                          if (parsed.results) {
-                            return Object.entries(parsed.results)
-                              .map(([key, value]) => `${key}: ${value}`)
-                              .join("\n");
-                          }
-                          return (
-                            parsed.result || steps[steps.length - 1].content
-                          );
-                        } catch {
-                          return steps[steps.length - 1].content;
-                        }
-                      })()}
-                    </ReactMarkdown>
-                  )
-                ) : (
-                  <ReactMarkdown components={MarkdownComponents}>
-                    {(() => {
-                      try {
-                        const parsed = JSON.parse(finalResult);
-                        if (parsed.results) {
-                          return Object.entries(parsed.results)
-                            .map(([key, value]) => `${key}: ${value}`)
-                            .join("\n");
-                        }
-                        return parsed.result || finalResult;
-                      } catch {
-                        return finalResult;
+
+                <ReactMarkdown components={MarkdownComponents}>
+                  {(() => {
+                    try {
+                      const lastStep = steps[steps.length - 1];
+                      const parsed = JSON.parse(lastStep.content);
+                      if (parsed.results) {
+                        return Object.entries(parsed.results)
+                          .map(([key, value]) => `${key}: ${value}`)
+                          .join("\n");
                       }
-                    })()}
-                  </ReactMarkdown>
-                )}
+                      return parsed.result || lastStep.content;
+                    } catch {
+                      return steps[steps.length - 1].content;
+                    }
+                  })()}
+                </ReactMarkdown>
 
                 {/* Feedback Form */}
                 <div className="mt-12 mb-24">

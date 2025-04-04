@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/ba108f9d-c717-41dd-96ad-f51ef5155a71.mp4",
+    "video_id": "ba108f9d-c717-41dd-96ad-f51ef5155a71.mp4",
+    "analysis_timestamp": "20250403_171327",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 52,
+    "video_duration_seconds": 30,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice."
+  },
+  "results": {
+    "visual": "## Compliance Analysis for Burger King Video\n\n### Executive Summary\n\nThe video was analyzed for brand compliance, with a focus on logo usage, color palette, and typography. The analysis revealed potential issues with typography, while the logo usage and color palette appear compliant.\n\n### Methodology\n\nThe video was analyzed based on the Burger King 2020 Brand Guidelines. The analysis involved examining the color palette, logo, and typography at specific timestamps. I kept in mind the prior feedback that the font detection system might not be capturing custom fonts.\n\n### Detailed Analysis\n\n**Color Palette:**\n*   At timestamp 0, the color palette consists of browns, creams, and beiges. These colors seem generally aligned with the \"BBQ Brown\" and \"Mayo Egg White\" colors from the Burger King color palette (page 61 of the brand guidelines).\n*   At timestamp 59, the dominant colors are gold, brown, and black. These colors seem to be aligned with the brand's color palette.\n\n**Logo Usage:**\n\n*   The logo at timestamp 59 is placed in a visually safe area within the frame and appears to have sufficient clear space.\n\n**Typography:**\n\n*   The font used in the video is flagged as \"Yeoman Jack Laser 2\", \"Yeoman Jack Twotone\", \"Sumi\", \"Rivesquare\", \"ENTRA Extended otf (400)\". These fonts don't seem to be part of the Flame typeface family (Flame Bold, Flame Regular, and Flame Sans), as specified on page 67 of the brand guidelines. Given the feedback that the font detection system might not be capturing custom fonts and that the typography guidelines emphasize organic shapes and an irreverent style (page 66), the detected fonts could potentially be a variation of the Flame typeface.\n\n### Compliance Status\n\n*   **Color Palette**: \u2705 Compliant\n*   **Logo Usage**: \u2705 Compliant\n*   **Typography**: \u26a0\ufe0f Potentially Non-Compliant: Given the system limitations in detecting exact font matches, there is a possibility that the fonts used align with the overall intent, but this cannot be 100% confirmed.\n\n### Recommendations\n\nDue to the limitations in identifying custom fonts, it is recommended that the fonts used be verified as either the Flame typeface family or a BK-approved alternative."
+  }
+}
