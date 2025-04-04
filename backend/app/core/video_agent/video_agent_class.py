@@ -355,7 +355,7 @@ class VideoAgent:
             print(f"🔢 Raw Bytes (first 200): {repr(final_text.encode('utf-8')[:200])}")
 
             # Process the complete text after streaming
-            try: # Top level try for XML processing and tool execution
+            try:  # Top level try for XML processing and tool execution
                 # Reset variables for each iteration
                 xml_dict = None
                 json_tool_name = None
@@ -363,7 +363,9 @@ class VideoAgent:
                 is_xml = False
 
                 # Method 1: Use regex to find XML specifically within ```xml ... ``` blocks
-                xml_code_block_match = re.search(r"```xml\s*(.*?)\s*```", final_text, re.DOTALL | re.IGNORECASE)
+                xml_code_block_match = re.search(
+                    r"```xml\s*(.*?)\s*```", final_text, re.DOTALL | re.IGNORECASE
+                )
                 if xml_code_block_match:
                     try:
                         xml_content = xml_code_block_match.group(1).strip()
@@ -371,20 +373,30 @@ class VideoAgent:
                             content_to_process = xml_content
                             xml_dict = xmltodict.parse(xml_content)
                             is_xml = True
-                            print(f"\n{'='*50}\n🔍 XML Processing Results (From ```xml Code Block Regex)\n{'='*50}")
+                            print(
+                                f"\n{'='*50}\n🔍 XML Processing Results (From ```xml Code Block Regex)\n{'='*50}"
+                            )
                             print(f"📋 Extracted XML Content:\n{xml_content}")
-                            print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
+                            print(
+                                f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
+                            )
                             json_tool_name = list(xml_dict.keys())[0]
                         else:
-                            print("⚠️ Content within ```xml block doesn't look like XML.")
+                            print(
+                                "⚠️ Content within ```xml block doesn't look like XML."
+                            )
                             is_xml = False
                     except Exception as xml_error:
-                        print(f"⚠️ Error parsing XML from ```xml code block: {str(xml_error)}")
+                        print(
+                            f"⚠️ Error parsing XML from ```xml code block: {str(xml_error)}"
+                        )
                         is_xml = False
 
                 # Method 2: If Method 1 failed, try direct XML tag search
                 if not is_xml:
-                    print(f"🔎 Attempting to extract XML directly from raw text (Method 2)")
+                    print(
+                        f"🔎 Attempting to extract XML directly from raw text (Method 2)"
+                    )
                     xml_pattern = r"<([a-zA-Z0-9_]+)>(.*?)</\1>"
                     xml_matches = re.findall(xml_pattern, final_text, re.DOTALL)
                     if xml_matches:
@@ -395,16 +407,24 @@ class VideoAgent:
                             is_xml = True
                             content_to_process = reconstructed_xml
                             json_tool_name = root_tag
-                            print(f"\n{'='*50}\n🔍 XML Processing Results (With Direct Regex)\n{'='*50}")
+                            print(
+                                f"\n{'='*50}\n🔍 XML Processing Results (With Direct Regex)\n{'='*50}"
+                            )
                             print(f"📋 Extracted XML Content:\n{reconstructed_xml}")
-                            print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
+                            print(
+                                f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
+                            )
                         except Exception as regex_xml_error:
-                            print(f"⚠️ Error parsing XML with direct regex (Method 2): {str(regex_xml_error)}")
+                            print(
+                                f"⚠️ Error parsing XML with direct regex (Method 2): {str(regex_xml_error)}"
+                            )
                             is_xml = False
 
                 # Method 3: If Methods 1 & 2 failed, try any code block
                 if not is_xml:
-                    print(f"🔎 Attempting to extract XML from *any* code block (Method 3)")
+                    print(
+                        f"🔎 Attempting to extract XML from *any* code block (Method 3)"
+                    )
                     code_block_pattern = r"```(?:xml)?\s*(.*?)```"
                     code_blocks = re.findall(code_block_pattern, final_text, re.DOTALL)
                     for block in code_blocks:
@@ -415,17 +435,21 @@ class VideoAgent:
                                 is_xml = True
                                 content_to_process = block
                                 json_tool_name = list(xml_dict.keys())[0]
-                                print(f"\n{'='*50}\n🔍 XML Processing Results (From Any Code Block Regex - Method 3)\n{'='*50}")
+                                print(
+                                    f"\n{'='*50}\n🔍 XML Processing Results (From Any Code Block Regex - Method 3)\n{'='*50}"
+                                )
                                 print(f"📋 Extracted XML Content:\n{block}")
-                                print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
-                                break # Found valid XML
+                                print(
+                                    f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
+                                )
+                                break  # Found valid XML
                         except Exception as block_error:
-                            continue # Ignore errors for non-XML blocks
+                            continue  # Ignore errors for non-XML blocks
 
                 # --- Check if XML was found and proceed ---
                 if not is_xml:
                     print("❌ No valid XML found in the response")
-                    continue # Skip to the next iteration of the outer while loop
+                    continue  # Skip to the next iteration of the outer while loop
 
                 # --- Tool Execution Logic (Only runs if is_xml is True) ---
                 print(f"\n🛠️ Tool Information:")
@@ -436,11 +460,16 @@ class VideoAgent:
                 tool_input = xml_dict[json_tool_name]
 
                 if (
-                    json_tool_name in [
-                        "get_video_color_scheme", "get_video_fonts",
-                        "get_region_color_scheme", "check_color_contrast",
-                        "check_video_frame_specs", "check_element_placement",
-                    ] and "timestamp" in tool_input
+                    json_tool_name
+                    in [
+                        "get_video_color_scheme",
+                        "get_video_fonts",
+                        "get_region_color_scheme",
+                        "check_color_contrast",
+                        "check_video_frame_specs",
+                        "check_element_placement",
+                    ]
+                    and "timestamp" in tool_input
                 ):
                     timestamp = int(tool_input["timestamp"])
                     frames_base64 = get_frames_by_timestamp(self.frames, timestamp)
@@ -449,15 +478,23 @@ class VideoAgent:
                         print(f"🖼️ Added 1 frame at timestamp {timestamp} to tool input")
                     else:
                         tool_input["images_base64"] = frames_base64
-                        tool_input["image_base64"] = frames_base64[0] # Backward compatibility
-                        print(f"🖼️ Added {len(frames_base64)} frames at timestamp {timestamp} to tool input")
+                        tool_input["image_base64"] = frames_base64[
+                            0
+                        ]  # Backward compatibility
+                        print(
+                            f"🖼️ Added {len(frames_base64)} frames at timestamp {timestamp} to tool input"
+                        )
 
                 # Send tool event if callback is set
                 if self.on_stream:
-                    await self.on_stream({
-                        "type": "tool",
-                        "content": json.dumps({"tool_name": json_tool_name, **tool_input}),
-                    })
+                    await self.on_stream(
+                        {
+                            "type": "tool",
+                            "content": json.dumps(
+                                {"tool_name": json_tool_name, **tool_input}
+                            ),
+                        }
+                    )
 
                 # Execute tool function
                 tool_function = get_tool_function(json_tool_name)
@@ -471,39 +508,36 @@ class VideoAgent:
 
                 # Update messages list for the next turn
                 messages.append({"role": "assistant", "content": content_to_process})
-                messages.append({"role": "user", "content": f"Tool Result:\n{tool_result}"})
+                messages.append(
+                    {"role": "user", "content": f"Tool Result:\n{tool_result}"}
+                )
 
                 # Check for completion tool
-                if json_tool_name == "attempt_completion": # Corrected indentation
-                    print(f"\n{'='*50}") # Corrected indentation
-                        print(
-                            f"🏁 {analysis_mode.upper()} Analysis Complete: 'attempt_completion' tool detected"
-                        )
-                        print(f"{'='*50}")
+                if json_tool_name == "attempt_completion":
+                    print(f"\n{'='*50}")
+                    print(
+                        f"🏁 {analysis_mode.upper()} Analysis Complete: 'attempt_completion' tool detected"
+                    )
+                    print(f"{'='*50}")
 
-                        # Store the final result for this analysis mode
-                        if "result" in tool_input:
-                            self.all_analysis_results[analysis_mode] = tool_input[
-                                "result"
-                            ]
+                    # Store the final result for this analysis mode
+                    if "result" in tool_input:
+                        self.all_analysis_results[analysis_mode] = tool_input["result"]
 
-                        # Break out of the while loop for this analysis mode
-                        break
+                    # Break out of the while loop for this analysis mode
+                    break  # Removed duplicated lines after this break
 
-                    print(f"🏁 {analysis_mode.upper()} Analysis Complete: 'attempt_completion' tool detected") # Corrected indentation
-                    print(f"{'='*50}") # Corrected indentation
-                    if "result" in tool_input: # Corrected indentation
-                        self.all_analysis_results[analysis_mode] = tool_input["result"] # Corrected indentation
-                    break # Corrected indentation - Exit the while True loop for this analysis mode
-
-            except Exception as e: # Catch errors during XML parsing or tool execution
-                print(f"\n{'-'*50}\n❌ Error Processing Content or Executing Tool: {str(e)}\n{'-'*50}")
+            except Exception as e:  # Catch errors during XML parsing or tool execution
+                print(
+                    f"\n{'-'*50}\n❌ Error Processing Content or Executing Tool: {str(e)}\n{'-'*50}"
+                )
                 print(f"📄 Raw Final Text (at time of error):\n{final_text}")
                 # Continue to the next iteration of the while True loop to retry the API call
                 continue
 
             # If loop finishes without break (e.g., tool executed but wasn't 'attempt_completion'),
             # it will implicitly continue to the next API call in the while True loop.
+
 
 # Example usage
 async def test():

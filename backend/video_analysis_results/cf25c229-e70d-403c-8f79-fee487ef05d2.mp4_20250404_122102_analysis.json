@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/cf25c229-e70d-403c-8f79-fee487ef05d2.mp4",
+    "video_id": "cf25c229-e70d-403c-8f79-fee487ef05d2.mp4",
+    "analysis_timestamp": "20250404_122102",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 52,
+    "video_duration_seconds": 30,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice."
+  },
+  "results": {}
+}
