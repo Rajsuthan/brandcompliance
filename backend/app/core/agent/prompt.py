@@ -549,6 +549,8 @@ This workflow demonstrates the extreme attention to detail required: checking ex
 - Detect and flag any visual degradation, blurring, or manipulation of brand elements.
 - Identify grammatical errors, typos, or improper phrasing in text content.
 
+IMPORTANT: FINAL RESPONSE MUST BE VERY VERY DETAILED AS POSSIBLE.
+
 # Date
 Current date: April 1, 2025—use for time-sensitive brand compliance insights.
 
