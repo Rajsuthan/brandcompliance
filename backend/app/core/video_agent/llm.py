@@ -1,3 +1,21 @@
+import aiohttp
+import yt_dlp
+from io import BytesIO
+import requests
+import cv2
+import tempfile
+import re
+from datetime import datetime
+import json
+import json as main_json
+from app.core.video_agent.video_tools import (
+    get_tool_function,
+)
+import xmltodict
+from app.core.agent.prompt import gemini_system_prompt
+# from google.genai import types # Removed google.genai specific types
+# from google import genai # Removed google.genai client
+from openai import OpenAI # Added OpenAI client
 import asyncio
 import base64
 import sys
@@ -9,30 +27,18 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Client Initialization (using OpenAI wrapper for Gemini)
+client = OpenAI(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+
 # Add the parent directory to the Python path
 backend_dir = str(
     Path(__file__).resolve().parents[3]
 )  # Go up 3 levels to reach the backend directory
 if backend_dir not in sys.path:
     sys.path.append(backend_dir)
-
-from google import genai
-from google.genai import types
-from app.core.agent.prompt import gemini_system_prompt
-import xmltodict
-from app.core.video_agent.video_tools import (
-    get_tool_function,
-)
-import json as main_json
-import json
-from datetime import datetime
-import re
-import tempfile
-import cv2
-import requests
-from io import BytesIO
-import yt_dlp
-import aiohttp
 
 
 async def validate_video_file(file_path):
@@ -67,7 +73,8 @@ async def download_youtube_video(url, temp_dir):
     """Download a video from YouTube using yt-dlp. Returns video_path."""
     try:
         ydl_opts = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",  # More flexible format selection
+            # More flexible format selection
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "outtmpl": os.path.join(temp_dir, "%(title)s.%(ext)s"),
             "quiet": True,
             # Enhanced download options (REMOVED cookie handling - not viable on Render)
@@ -84,7 +91,8 @@ async def download_youtube_video(url, temp_dir):
             "extract_flat": "in_playlist",  # Helps avoid some age restrictions
             "youtube_include_dash_manifest": False,
             # User agent to avoid bot detection
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",  # Generic user agent
+            # Generic user agent
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -147,7 +155,8 @@ async def download_direct_video(url):
 
         # Download the video with custom headers
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",  # Generic user agent
+            # Generic user agent
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate",
             "Connection": "keep-alive",
@@ -222,7 +231,7 @@ async def download_video(url):
     Download a video from a URL.
     Returns a tuple: (video_path, temp_dir_to_clean)
     temp_dir_to_clean will be None for direct downloads.
-    
+
     Note: This function always returns a tuple (path, temp_dir) for consistency.
     """
     print(f"🎬 Downloading video from {url}")
@@ -441,28 +450,29 @@ def get_frame_by_timestamp(frames, timestamp):
 
 
 async def generate():
-    client = genai.Client(
-        vertexai=True,
-        project=os.getenv("GOOGLE_CLOUD_PROJECT", "nifty-digit-452608-t4"),
-        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
-    )
+    # Removed Vertex AI specific client initialization and credentials
+    # Client is now initialized globally above
 
     video_url = "https://www.youtube.com/watch?v=9cPxh2DikIA"
 
     video_path = None
     temp_dir_to_clean = None  # For YouTube downloads
     temp_file_to_clean = None  # For direct downloads
-    frames = [] # Initialize frames list
+    frames = []  # Initialize frames list
 
     try:
         # Download the video and extract frames
-        video_path_tuple = await download_video(video_url) # Returns (path, temp_dir or None)
+        video_path_tuple = await download_video(
+            video_url
+        )  # Returns (path, temp_dir or None)
         video_path = video_path_tuple[0]
         temp_dir_to_clean = video_path_tuple[1]
         if temp_dir_to_clean is None:  # It was a direct download
             temp_file_to_clean = video_path  # Mark the file itself for cleanup
 
-        frames = extract_frames(video_path, interval=1, similarity_threshold=0.8) # Pass only the path
+        frames = extract_frames(
+            video_path, interval=1, similarity_threshold=0.8
+        )  # Pass only the path
 
         # Initialize empty frame_captions
         frame_captions = {"error": "Audio transcription disabled"}
@@ -487,115 +497,84 @@ async def generate():
             print(f"🔍 Starting {analysis_mode.upper()} analysis")
             print(f"{'='*50}")
 
-            # Create parts list with all frames as images
-            parts = []
+            # Create messages list in OpenAI format
+            messages = []
 
-            # Add system prompt and instruction
-            parts.append(types.Part.from_text(text=gemini_system_prompt))
+            # Add system prompt (if not already added or handled differently)
+            # Assuming gemini_system_prompt is the main system instruction
+            messages.append({"role": "system", "content": gemini_system_prompt})
+
+            # Prepare user message content (will include text and images)
+            user_content = []
 
             # Set instruction based on current analysis mode
+            instruction_text = ""
             if analysis_mode == "visual":
-                instruction = (
+                # instruction = ( # Removed leftover line causing syntax error
+                instruction_text = (
                     "Check the compliance of this video for logo usage, color and brand compliance. "
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
-
-                # Add transcription information if available
                 if "error" not in frame_captions:
-                    instruction += (
-                        f" along with audio transcription for each timestamp."
-                    )
+                    instruction_text += f" along with audio transcription for each timestamp."
                 else:
-                    instruction += "."
+                    instruction_text += "."
             elif analysis_mode == "brand_voice":
-                instruction = (
+                instruction_text = (
                     "Analyze the BRAND VOICE of this video. Focus specifically on the overall personality and style. "
                     "Check if the tone is consistent with brand guidelines and if the personality expressed aligns with brand values. "
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
-
-                # Add transcription information if available
                 if "error" not in frame_captions:
-                    instruction += (
-                        f" along with audio transcription for each timestamp."
-                    )
+                    instruction_text += f" along with audio transcription for each timestamp."
                 else:
-                    instruction += "."
+                    instruction_text += "."
             elif analysis_mode == "tone":
-                instruction = (
+                instruction_text = (
                     "Analyze the TONE OF VOICE in this video. Focus specifically on mood variations based on context. "
                     "Check if the emotional tone shifts appropriately for different scenes and if these shifts align with brand guidelines. "
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
-
-                # Add transcription information if available
                 if "error" not in frame_captions:
-                    instruction += (
-                        f" along with audio transcription for each timestamp."
-                    )
+                    instruction_text += f" along with audio transcription for each timestamp."
                 else:
-                    instruction += "."
+                    instruction_text += "."
 
-            parts.append(types.Part.from_text(text=instruction))
+            user_content.append({"type": "text", "text": instruction_text})
 
-            # Add transcription data if available
-            if "error" not in frame_captions:
+            # Add transcription data if available and valid
+            if "error" not in frame_captions and frame_captions.get("frame_captions"):
                 transcription_text = "Video Transcription by Timestamp:\n"
-                for timestamp, caption_data in frame_captions.get(
-                    "frame_captions", {}
-                ).items():
+                transcription_items = []
+                for timestamp, caption_data in frame_captions.get("frame_captions", {}).items():
                     if caption_data.get("text"):
-                        transcription_text += (
-                            f"[{timestamp}s]: {caption_data['text']}\n"
-                        )
+                        transcription_items.append(f"[{timestamp}s]: {caption_data['text']}")
 
-                if transcription_text != "Video Transcription by Timestamp:\n":
-                    parts.append(types.Part.from_text(text=transcription_text))
+                if transcription_items:
+                    transcription_text += "\n".join(transcription_items)
+                    user_content.append({"type": "text", "text": transcription_text})
                     print("📝 Added transcription data to API request")
 
-            # Add all frames to the parts list
+            # Add all frames as image parts
             frame_count = len(frames)
-
-            # Add each frame to the parts list
-            for i, frame in enumerate(frames):
-                # Decode base64 to bytes
-                image_bytes = base64.b64decode(frame["base64"])
-                # Add image part
-                parts.append(
-                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+            for i, frame_data in enumerate(frames):
+                # Add image part using base64 data URI scheme
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{frame_data['base64']}"
+                        },
+                    }
                 )
                 print(
-                    f"🖼️ Added frame {i+1}/{frame_count} at timestamp {frame['timestamp']} to API request"
+                    f"🖼️ Added frame {i+1}/{frame_count} at timestamp {frame_data['timestamp']} to API request"
                 )
 
-            # Create the content with all parts
-            contents = [
-                types.Content(
-                    role="user",
-                    parts=parts,
-                ),
-            ]
-            generate_content_config = types.GenerateContentConfig(
-                temperature=1,
-                top_p=0.95,
-                max_output_tokens=8192,
-                response_modalities=["TEXT"],
-                safety_settings=[
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT", threshold="OFF"
-                    ),
-                ],
-                system_instruction=gemini_system_prompt,
-            )
+            # Add the user message to the messages list
+            messages.append({"role": "user", "content": user_content})
+
+            # Removed generate_content_config - parameters are passed directly to create()
 
             # Store the final result for this analysis mode
             analysis_result = None
@@ -617,19 +596,33 @@ async def generate():
 
                 while retry_count < max_retries and not streaming_successful:
                     try:
-                        for chunk in client.models.generate_content_stream(
+                        # Use client.chat.completions.create for streaming
+                        response_stream = client.chat.completions.create(
                             model=model,
-                            contents=contents,
-                            config=generate_content_config,
-                        ):
-                            print(f"📦 Chunk received: {chunk.text}")
-                            final_text += chunk.text
+                            messages=messages, # Pass the constructed messages list
+                            stream=True,
+                            # Pass other parameters directly if needed (e.g., temperature, max_tokens)
+                            # temperature=1, # Example
+                            max_tokens=8192, # Example
+                            # stop=["</tool_code>"] # Example stop sequence if needed
+                        )
 
-                        # If we get here without exception, streaming was successful
-                        streaming_successful = True
+                        for chunk in response_stream:
+                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                                chunk_text = chunk.choices[0].delta.content
+                                print(f"📦 Chunk received: {chunk_text}")
+                                final_text += chunk_text
+                            # Check for finish reason (OpenAI format)
+                            if chunk.choices and chunk.choices[0].finish_reason:
+                                print(f"🏁 Stream finished with reason: {chunk.choices[0].finish_reason}")
+                                break # Exit inner loop on finish
+
+                        streaming_successful = True # Assume success if loop completes or finishes cleanly
 
                     except Exception as e:
                         retry_count += 1
+                        print(f"\nStream Error Type: {type(e).__name__}") # Debugging
+                        print(f"Stream Error Args: {e.args}") # Debugging
                         if retry_count < max_retries:
                             print(
                                 f"\n⚠️ Streaming error (attempt {retry_count}/{max_retries}): {str(e)}"
@@ -816,50 +809,30 @@ async def generate():
                         # Execute tool function
                         tool_function = get_tool_function(json_tool_name)
                         tool_result = await tool_function(tool_input)
-                        tool_result_json = main_json.loads(tool_result)
+                        tool_result_json = main_json.loads(tool_result) # Corrected indentation
 
                         print(f"\n{'='*50}")
                         print("⚙️ Tool Execution Results")
                         print(f"{'='*50}")
+                        print(f"Tool Result: {tool_result}") # Log tool result
 
-                        # Update contents
-                        contents.append(
-                            types.Content(
-                                role="assistant",
-                                parts=[types.Part.from_text(text=content_to_process)],
-                            )
-                        )
+                        # Update messages list (OpenAI format)
+                        # 1. Add the assistant's response (which contained the tool call)
+                        messages.append({"role": "assistant", "content": content_to_process}) # Assuming content_to_process holds the raw XML tool call
 
-                        if tool_result_json.get("base64"):
-                            contents.append(
-                                types.Content(
-                                    role="user",
-                                    parts=[
-                                        types.Part.from_bytes(
-                                            data=base64.b64decode(
-                                                tool_result_json["base64"]
-                                            ),
-                                            mime_type="image/*",
-                                        ),
-                                        types.Part.from_text(
-                                            text=main_json.dumps(
-                                                {
-                                                    k: v
-                                                    for k, v in tool_result_json.items()
-                                                    if k != "base64"
-                                                }
-                                            )
-                                        ),
-                                    ],
-                                )
-                            )
-                        else:
-                            contents.append(
-                                types.Content(
-                                    role="user",
-                                    parts=[types.Part.from_text(text=tool_result)],
-                                )
-                            )
+                        # 2. Add the tool result message
+                        # Note: OpenAI expects tool calls/results differently, often via function calling mechanism.
+                        # This simulates adding a user message with the tool output for the next turn.
+                        # A more robust implementation might use OpenAI's tool/function calling features if the wrapper supports it.
+                        # For now, adding as a user message containing the result string.
+                        messages.append({"role": "user", "content": f"Tool Result:\n{tool_result}"})
+
+                        # If the tool result included an image, we might need a way to represent that.
+                        # OpenAI's standard message format doesn't directly support tool results with images.
+                        # We'll skip adding the image back into the conversation history for now.
+                        # if tool_result_json.get("base64"):
+                        #    print("⚠️ Image in tool result - cannot add back to OpenAI message history directly.")
+
 
                         if json_tool_name == "attempt_completion":
                             print(f"\n{'='*50}")
@@ -937,12 +910,18 @@ async def generate():
         # --- Final Cleanup with Debugging ---
         print(f"--- Starting Cleanup ---")
         print(f"Debug: video_path = {repr(video_path)} (type: {type(video_path)})")
-        print(f"Debug: temp_dir_to_clean = {repr(temp_dir_to_clean)} (type: {type(temp_dir_to_clean)})")
-        print(f"Debug: temp_file_to_clean = {repr(temp_file_to_clean)} (type: {type(temp_file_to_clean)})")
+        print(
+            f"Debug: temp_dir_to_clean = {repr(temp_dir_to_clean)} (type: {type(temp_dir_to_clean)})"
+        )
+        print(
+            f"Debug: temp_file_to_clean = {repr(temp_file_to_clean)} (type: {type(temp_file_to_clean)})"
+        )
 
         # Clean up the temporary directory for YouTube downloads
         if temp_dir_to_clean:
-            print(f"Cleanup Check: temp_dir_to_clean = {repr(temp_dir_to_clean)} (type: {type(temp_dir_to_clean)})")
+            print(
+                f"Cleanup Check: temp_dir_to_clean = {repr(temp_dir_to_clean)} (type: {type(temp_dir_to_clean)})"
+            )
             if isinstance(temp_dir_to_clean, str) and os.path.exists(temp_dir_to_clean):
                 try:
                     shutil.rmtree(temp_dir_to_clean)
@@ -952,12 +931,16 @@ async def generate():
                         f"⚠️ Could not remove temporary directory {temp_dir_to_clean}: {str(cleanup_e)}"
                     )
             elif not isinstance(temp_dir_to_clean, str):
-                 print(f"⚠️ Cleanup Error: temp_dir_to_clean is not a string!")
+                print(f"⚠️ Cleanup Error: temp_dir_to_clean is not a string!")
 
         # Clean up the temporary file for direct downloads
         elif temp_file_to_clean:
-            print(f"Cleanup Check: temp_file_to_clean = {repr(temp_file_to_clean)} (type: {type(temp_file_to_clean)})")
-            if isinstance(temp_file_to_clean, str) and os.path.exists(temp_file_to_clean):
+            print(
+                f"Cleanup Check: temp_file_to_clean = {repr(temp_file_to_clean)} (type: {type(temp_file_to_clean)})"
+            )
+            if isinstance(temp_file_to_clean, str) and os.path.exists(
+                temp_file_to_clean
+            ):
                 try:
                     os.unlink(temp_file_to_clean)
                     print(f"🧹 Cleaned up temporary file {temp_file_to_clean}")
@@ -966,12 +949,14 @@ async def generate():
                         f"⚠️ Could not remove temporary file {temp_file_to_clean}: {str(cleanup_e)}"
                     )
             elif not isinstance(temp_file_to_clean, str):
-                 print(f"⚠️ Cleanup Error: temp_file_to_clean is not a string!")
+                print(f"⚠️ Cleanup Error: temp_file_to_clean is not a string!")
 
         # If video_path exists but wasn't marked for specific cleanup (edge case, should not happen often with new logic)
         elif video_path:
-             print(f"Cleanup Check (Edge Case): video_path = {repr(video_path)} (type: {type(video_path)})")
-             if isinstance(video_path, str) and os.path.exists(video_path):
+            print(
+                f"Cleanup Check (Edge Case): video_path = {repr(video_path)} (type: {type(video_path)})"
+            )
+            if isinstance(video_path, str) and os.path.exists(video_path):
                 try:
                     os.unlink(video_path)
                     print(f"🧹 Cleaned up remaining video file {video_path}")
@@ -979,8 +964,8 @@ async def generate():
                     print(
                         f"⚠️ Could not remove remaining video file {video_path}: {str(cleanup_e)}"
                     )
-             elif not isinstance(video_path, str):
-                 print(f"⚠️ Cleanup Error: video_path is not a string!")
+            elif not isinstance(video_path, str):
+                print(f"⚠️ Cleanup Error: video_path is not a string!")
         print(f"--- Finished Cleanup ---")
 
 

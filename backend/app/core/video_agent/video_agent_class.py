@@ -16,8 +16,10 @@ from app.core.video_agent.llm import (
 )
 
 from app.core.agent.prompt import gemini_system_prompt
-from google import genai
-from google.genai import types
+
+# from google import genai # Removed google.genai client
+# from google.genai import types # Removed google.genai types
+from openai import OpenAI  # Added OpenAI client
 import xmltodict
 from app.core.video_agent.video_tools import get_tool_function
 import re
@@ -56,14 +58,17 @@ class VideoAgent:
         self.on_stop = on_stop
         self.user_id = user_id
         self.message_id = message_id
-        self.tool_response = ""
-        self.text_response = ""
+        self.tool_response = (
+            ""  # Consider if this is still needed with OpenAI structure
+        )
+        self.text_response = (
+            ""  # Consider if this is still needed with OpenAI structure
+        )
 
-        # Initialize the Google AI client
-        self.client = genai.Client(
-            vertexai=True,
-            project=os.getenv("GOOGLE_CLOUD_PROJECT", "nifty-digit-452608-t4"),
-            location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        # Initialize the OpenAI client (using wrapper for Gemini)
+        self.client = OpenAI(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
 
         # Initialize results storage
@@ -189,104 +194,88 @@ class VideoAgent:
         print(f"🔍 Starting {analysis_mode.upper()} analysis")
         print(f"{'='*50}")
 
-        # Create parts list with all frames as images
-        parts = []
+        # Create messages list in OpenAI format
+        messages = []
 
-        # Add system prompt and instruction
-        parts.append(types.Part.from_text(text=self.system_prompt))
+        # Add system prompt
+        messages.append({"role": "system", "content": self.system_prompt})
+
+        # Prepare user message content (will include text and images)
+        user_content = []
 
         # Set instruction based on current analysis mode and user message
+        instruction_text = ""
         if message:
-            instruction = message
+            instruction_text = message
         elif analysis_mode == "visual":
-            instruction = (
+            instruction_text = (
                 "Check the compliance of this video for logo usage, color and brand compliance. "
                 f"I'm providing {len(self.frames)} frames from a {len(set(frame['timestamp'] for frame in self.frames))} second video"
             )
         elif analysis_mode == "brand_voice":
-            instruction = (
+            instruction_text = (
                 "Analyze the BRAND VOICE of this video. Focus specifically on the overall personality and style. "
                 "Check if the tone is consistent with brand guidelines and if the personality expressed aligns with brand values. "
                 f"I'm providing {len(self.frames)} frames from a {len(set(frame['timestamp'] for frame in self.frames))} second video"
             )
         elif analysis_mode == "tone":
-            instruction = (
+            instruction_text = (
                 "Analyze the TONE OF VOICE in this video. Focus specifically on mood variations based on context. "
                 "Check if the emotional tone shifts appropriately for different scenes and if these shifts align with brand guidelines. "
                 f"I'm providing {len(self.frames)} frames from a {len(set(frame['timestamp'] for frame in self.frames))} second video"
             )
         else:
-            instruction = (
+            instruction_text = (
                 f"Analyze this video based on the following criteria: {analysis_mode}. "
                 f"I'm providing {len(self.frames)} frames from a {len(set(frame['timestamp'] for frame in self.frames))} second video"
             )
 
         # Add transcription information if available
         if "error" not in self.frame_captions:
-            instruction += f" along with audio transcription for each timestamp."
+            instruction_text += f" along with audio transcription for each timestamp."
         else:
-            instruction += "."
+            instruction_text += "."
 
-        parts.append(types.Part.from_text(text=instruction))
-
-        # Add transcription data if available
-        if "error" not in self.frame_captions:
+        user_content.append({"type": "text", "text": instruction_text})
+        # Add transcription data if available and valid
+        if "error" not in self.frame_captions and self.frame_captions.get(
+            "frame_captions"
+        ):
             transcription_text = "Video Transcription by Timestamp:\n"
+            transcription_items = []
             for timestamp, caption_data in self.frame_captions.get(
                 "frame_captions", {}
             ).items():
                 if caption_data.get("text"):
-                    transcription_text += f"[{timestamp}s]: {caption_data['text']}\n"
+                    transcription_items.append(
+                        f"[{timestamp}s]: {caption_data['text']}"
+                    )
 
-            if transcription_text != "Video Transcription by Timestamp:\n":
-                parts.append(types.Part.from_text(text=transcription_text))
+            if transcription_items:
+                transcription_text += "\n".join(transcription_items)
+                user_content.append({"type": "text", "text": transcription_text})
                 print("📝 Added transcription data to API request")
 
-        # Add all frames to the parts list
+        # Add all frames as image parts
         frame_count = len(self.frames)
-
-        # Add each frame to the parts list
-        for i, frame in enumerate(self.frames):
-            # Decode base64 to bytes
-            import base64
-
-            image_bytes = base64.b64decode(frame["base64"])
-            # Add image part
-            parts.append(
-                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+        for i, frame_data in enumerate(self.frames):
+            # Add image part using base64 data URI scheme
+            user_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{frame_data['base64']}"
+                    },
+                }
             )
             print(
-                f"🖼️ Added frame {i+1}/{frame_count} at timestamp {frame['timestamp']} to API request"
+                f"🖼️ Added frame {i+1}/{frame_count} at timestamp {frame_data['timestamp']} to API request"
             )
 
-        # Create the content with all parts
-        contents = [
-            types.Content(
-                role="user",
-                parts=parts,
-            ),
-        ]
-        generate_content_config = types.GenerateContentConfig(
-            temperature=1,
-            top_p=0.95,
-            max_output_tokens=8192,
-            response_modalities=["TEXT"],
-            safety_settings=[
-                types.SafetySetting(
-                    category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"
-                ),
-                types.SafetySetting(
-                    category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"
-                ),
-                types.SafetySetting(
-                    category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"
-                ),
-                types.SafetySetting(
-                    category="HARM_CATEGORY_HARASSMENT", threshold="OFF"
-                ),
-            ],
-            system_instruction=self.system_prompt,
-        )
+        # Add the user message to the messages list
+        messages.append({"role": "user", "content": user_content})
+
+        # Removed generate_content_config
 
         # Process loop for this analysis mode
         while True:
@@ -305,22 +294,39 @@ class VideoAgent:
 
             while retry_count < max_retries and not streaming_successful:
                 try:
-                    for chunk in self.client.models.generate_content_stream(
+                    # Use client.chat.completions.create for streaming
+                    response_stream = self.client.chat.completions.create(
                         model=self.model,
-                        contents=contents,
-                        config=generate_content_config,
-                    ):
-                        print(f"📦 Chunk received: {chunk.text}")
-                        final_text += chunk.text
+                        messages=messages,  # Pass the constructed messages list
+                        stream=True,
+                        max_tokens=8192,  # Example max_tokens
+                        # Add other parameters like temperature if needed
+                    )
 
-                        # Send streaming event if callback is set
-                        if self.on_stream:
-                            await self.on_stream(
-                                {"type": "text", "content": chunk.text}
+                    for chunk in response_stream:
+                        if (
+                            chunk.choices
+                            and chunk.choices[0].delta
+                            and chunk.choices[0].delta.content
+                        ):
+                            chunk_text = chunk.choices[0].delta.content
+                            print(f"📦 Chunk received: {chunk_text}")
+                            final_text += chunk_text
+                            # Send streaming event if callback is set
+                            if self.on_stream:
+                                await self.on_stream(
+                                    {"type": "text", "content": chunk_text}
+                                )
+                        # Check for finish reason
+                        if chunk.choices and chunk.choices[0].finish_reason:
+                            print(
+                                f"🏁 Stream finished with reason: {chunk.choices[0].finish_reason}"
                             )
+                            break  # Exit inner loop
 
-                    # If we get here without exception, streaming was successful
-                    streaming_successful = True
+                    streaming_successful = (
+                        True  # Assume success if loop completes/finishes
+                    )
 
                 except Exception as e:
                     retry_count += 1
@@ -349,212 +355,127 @@ class VideoAgent:
             print(f"🔢 Raw Bytes (first 200): {repr(final_text.encode('utf-8')[:200])}")
 
             # Process the complete text after streaming
-            try:
-                # Reset variables for each iteration to prevent using stale data
+            try: # Top level try for XML processing and tool execution
+                # Reset variables for each iteration
                 xml_dict = None
                 json_tool_name = None
                 content_to_process = None
                 is_xml = False
 
-                # Method 1: Check if XML is wrapped in code blocks
-                if "```xml" in final_text and "```" in final_text.split("```xml")[1]:
+                # Method 1: Use regex to find XML specifically within ```xml ... ``` blocks
+                xml_code_block_match = re.search(r"```xml\s*(.*?)\s*```", final_text, re.DOTALL | re.IGNORECASE)
+                if xml_code_block_match:
                     try:
-                        xml_content = (
-                            final_text.split("```xml")[1].split("```")[0].strip()
-                        )
-                        content_to_process = xml_content
-                        xml_dict = xmltodict.parse(xml_content)
-                        is_xml = True
-
-                        print(f"\n{'='*50}")
-                        print("🔍 XML Processing Results (With Code Block Markers)")
-                        print(f"{'='*50}")
-                        print(f"📋 Extracted XML Content:\n{xml_content}")
-                        print(
-                            f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
-                        )
-
-                        json_tool_name = list(xml_dict.keys())[0]
+                        xml_content = xml_code_block_match.group(1).strip()
+                        if xml_content.startswith("<") and xml_content.endswith(">"):
+                            content_to_process = xml_content
+                            xml_dict = xmltodict.parse(xml_content)
+                            is_xml = True
+                            print(f"\n{'='*50}\n🔍 XML Processing Results (From ```xml Code Block Regex)\n{'='*50}")
+                            print(f"📋 Extracted XML Content:\n{xml_content}")
+                            print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
+                            json_tool_name = list(xml_dict.keys())[0]
+                        else:
+                            print("⚠️ Content within ```xml block doesn't look like XML.")
+                            is_xml = False
                     except Exception as xml_error:
-                        print(f"⚠️ Error parsing XML from code blocks: {str(xml_error)}")
+                        print(f"⚠️ Error parsing XML from ```xml code block: {str(xml_error)}")
                         is_xml = False
 
-                # Method 2: If Method 1 failed, try to find XML tags with regex in the raw text
+                # Method 2: If Method 1 failed, try direct XML tag search
                 if not is_xml:
-                    print(f"🔎 Attempting to extract XML directly from raw text")
-
-                    # Look for XML-like patterns in the text
-                    # First, try to find a complete XML structure with a root tag
+                    print(f"🔎 Attempting to extract XML directly from raw text (Method 2)")
                     xml_pattern = r"<([a-zA-Z0-9_]+)>(.*?)</\1>"
                     xml_matches = re.findall(xml_pattern, final_text, re.DOTALL)
-
                     if xml_matches:
                         try:
-                            # Reconstruct XML from the first match
                             root_tag, content = xml_matches[0]
                             reconstructed_xml = f"<{root_tag}>{content}</{root_tag}>"
-
                             xml_dict = xmltodict.parse(reconstructed_xml)
                             is_xml = True
                             content_to_process = reconstructed_xml
                             json_tool_name = root_tag
-
-                            print(f"\n{'='*50}")
-                            print("🔍 XML Processing Results (With Direct Regex)")
-                            print(f"{'='*50}")
+                            print(f"\n{'='*50}\n🔍 XML Processing Results (With Direct Regex)\n{'='*50}")
                             print(f"📋 Extracted XML Content:\n{reconstructed_xml}")
-                            print(
-                                f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
-                            )
+                            print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
                         except Exception as regex_xml_error:
-                            print(
-                                f"⚠️ Error parsing XML with direct regex: {str(regex_xml_error)}"
-                            )
+                            print(f"⚠️ Error parsing XML with direct regex (Method 2): {str(regex_xml_error)}")
                             is_xml = False
 
-                # Method 3: Try to find XML in code blocks with a more flexible approach
+                # Method 3: If Methods 1 & 2 failed, try any code block
                 if not is_xml:
-                    print(
-                        f"🔎 Attempting to extract XML from code blocks with flexible regex"
-                    )
-                    # Look for content between any code block markers that might contain XML
+                    print(f"🔎 Attempting to extract XML from *any* code block (Method 3)")
                     code_block_pattern = r"```(?:xml)?\s*(.*?)```"
                     code_blocks = re.findall(code_block_pattern, final_text, re.DOTALL)
-
                     for block in code_blocks:
                         try:
-                            # Try to parse each block as XML
                             block = block.strip()
-                            if block and block[0] == "<" and block[-1] == ">":
+                            if block and block.startswith("<") and block.endswith(">"):
                                 xml_dict = xmltodict.parse(block)
                                 is_xml = True
                                 content_to_process = block
                                 json_tool_name = list(xml_dict.keys())[0]
-
-                                print(f"\n{'='*50}")
-                                print(
-                                    "🔍 XML Processing Results (From Code Block with Regex)"
-                                )
-                                print(f"{'='*50}")
+                                print(f"\n{'='*50}\n🔍 XML Processing Results (From Any Code Block Regex - Method 3)\n{'='*50}")
                                 print(f"📋 Extracted XML Content:\n{block}")
-                                print(
-                                    f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
-                                )
-                                break
+                                print(f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}")
+                                break # Found valid XML
                         except Exception as block_error:
-                            print(
-                                f"⚠️ Error parsing potential XML block: {str(block_error)}"
-                            )
-                            continue
+                            continue # Ignore errors for non-XML blocks
 
+                # --- Check if XML was found and proceed ---
                 if not is_xml:
                     print("❌ No valid XML found in the response")
-                    continue
+                    continue # Skip to the next iteration of the outer while loop
 
-                # Only proceed with tool execution if we have valid XML data
-                if is_xml and xml_dict and json_tool_name:
-                    print(f"\n🛠️ Tool Information:")
-                    print(f"📌 Tool Name: {json_tool_name}")
-                    print(f"📊 Processed Data:\n{json.dumps(xml_dict, indent=2)}")
+                # --- Tool Execution Logic (Only runs if is_xml is True) ---
+                print(f"\n🛠️ Tool Information:")
+                print(f"📌 Tool Name: {json_tool_name}")
+                print(f"📊 Processed Data:\n{json.dumps(xml_dict, indent=2)}")
 
-                    # Add image_base64 to tool input if it's a video analysis tool and has a timestamp
-                    tool_input = xml_dict[json_tool_name]
+                # Add image_base64 to tool input if needed
+                tool_input = xml_dict[json_tool_name]
 
-                    # Check if this is a video tool that requires a timestamp
-                    if (
-                        json_tool_name
-                        in [
-                            "get_video_color_scheme",
-                            "get_video_fonts",
-                            "get_region_color_scheme",
-                            "check_color_contrast",
-                            "check_video_frame_specs",
-                            "check_element_placement",
-                        ]
-                        and "timestamp" in tool_input
-                    ):
-                        # Get the timestamp and corresponding frames
-                        timestamp = int(tool_input["timestamp"])
-                        frames_base64 = get_frames_by_timestamp(self.frames, timestamp)
-
-                        # Add the base64 images to the tool input
-                        if len(frames_base64) == 1:
-                            # For backward compatibility with tools that expect a single image
-                            tool_input["image_base64"] = frames_base64[0]
-                            print(
-                                f"🖼️ Added 1 frame at timestamp {timestamp} to tool input"
-                            )
-                        else:
-                            # For tools that can handle multiple images
-                            tool_input["images_base64"] = frames_base64
-                            tool_input["image_base64"] = frames_base64[
-                                0
-                            ]  # For backward compatibility
-                            print(
-                                f"🖼️ Added {len(frames_base64)} frames at timestamp {timestamp} to tool input"
-                            )
-
-                    # Send tool event if callback is set
-                    if self.on_stream:
-                        await self.on_stream(
-                            {
-                                "type": "tool",
-                                "content": json.dumps(
-                                    {"tool_name": json_tool_name, **tool_input}
-                                ),
-                            }
-                        )
-
-                    # Execute tool function
-                    tool_function = get_tool_function(json_tool_name)
-                    tool_result = await tool_function(tool_input)
-                    tool_result_json = json.loads(tool_result)
-
-                    print(f"\n{'='*50}")
-                    print("⚙️ Tool Execution Results")
-                    print(f"{'='*50}")
-
-                    # Update contents
-                    contents.append(
-                        types.Content(
-                            role="assistant",
-                            parts=[types.Part.from_text(text=content_to_process)],
-                        )
-                    )
-
-                    if tool_result_json.get("base64"):
-                        contents.append(
-                            types.Content(
-                                role="user",
-                                parts=[
-                                    types.Part.from_bytes(
-                                        data=base64.b64decode(
-                                            tool_result_json["base64"]
-                                        ),
-                                        mime_type="image/*",
-                                    ),
-                                    types.Part.from_text(
-                                        text=json.dumps(
-                                            {
-                                                k: v
-                                                for k, v in tool_result_json.items()
-                                                if k != "base64"
-                                            }
-                                        )
-                                    ),
-                                ],
-                            )
-                        )
+                if (
+                    json_tool_name in [
+                        "get_video_color_scheme", "get_video_fonts",
+                        "get_region_color_scheme", "check_color_contrast",
+                        "check_video_frame_specs", "check_element_placement",
+                    ] and "timestamp" in tool_input
+                ):
+                    timestamp = int(tool_input["timestamp"])
+                    frames_base64 = get_frames_by_timestamp(self.frames, timestamp)
+                    if len(frames_base64) == 1:
+                        tool_input["image_base64"] = frames_base64[0]
+                        print(f"🖼️ Added 1 frame at timestamp {timestamp} to tool input")
                     else:
-                        contents.append(
-                            types.Content(
-                                role="user",
-                                parts=[types.Part.from_text(text=tool_result)],
-                            )
-                        )
+                        tool_input["images_base64"] = frames_base64
+                        tool_input["image_base64"] = frames_base64[0] # Backward compatibility
+                        print(f"🖼️ Added {len(frames_base64)} frames at timestamp {timestamp} to tool input")
 
-                    if json_tool_name == "attempt_completion":
-                        print(f"\n{'='*50}")
+                # Send tool event if callback is set
+                if self.on_stream:
+                    await self.on_stream({
+                        "type": "tool",
+                        "content": json.dumps({"tool_name": json_tool_name, **tool_input}),
+                    })
+
+                # Execute tool function
+                tool_function = get_tool_function(json_tool_name)
+                tool_result = await tool_function(tool_input)
+                tool_result_json = json.loads(tool_result)
+
+                print(f"\n{'='*50}")
+                print("⚙️ Tool Execution Results")
+                print(f"{'='*50}")
+                print(f"Tool Result: {tool_result}")
+
+                # Update messages list for the next turn
+                messages.append({"role": "assistant", "content": content_to_process})
+                messages.append({"role": "user", "content": f"Tool Result:\n{tool_result}"})
+
+                # Check for completion tool
+                if json_tool_name == "attempt_completion": # Corrected indentation
+                    print(f"\n{'='*50}") # Corrected indentation
                         print(
                             f"🏁 {analysis_mode.upper()} Analysis Complete: 'attempt_completion' tool detected"
                         )
@@ -569,14 +490,20 @@ class VideoAgent:
                         # Break out of the while loop for this analysis mode
                         break
 
-            except Exception as e:
-                print(f"\n{'-'*50}")
-                print(f"❌ Error Processing Content: {str(e)}")
-                print(f"📄 Raw Final Text:\n{final_text}")
-                print(f"🔢 Raw Bytes (full): {repr(final_text.encode('utf-8'))}")
-                print(f"{'-'*50}")
+                    print(f"🏁 {analysis_mode.upper()} Analysis Complete: 'attempt_completion' tool detected") # Corrected indentation
+                    print(f"{'='*50}") # Corrected indentation
+                    if "result" in tool_input: # Corrected indentation
+                        self.all_analysis_results[analysis_mode] = tool_input["result"] # Corrected indentation
+                    break # Corrected indentation - Exit the while True loop for this analysis mode
+
+            except Exception as e: # Catch errors during XML parsing or tool execution
+                print(f"\n{'-'*50}\n❌ Error Processing Content or Executing Tool: {str(e)}\n{'-'*50}")
+                print(f"📄 Raw Final Text (at time of error):\n{final_text}")
+                # Continue to the next iteration of the while True loop to retry the API call
                 continue
 
+            # If loop finishes without break (e.g., tool executed but wasn't 'attempt_completion'),
+            # it will implicitly continue to the next API call in the while True loop.
 
 # Example usage
 async def test():

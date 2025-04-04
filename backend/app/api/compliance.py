@@ -335,7 +335,7 @@ async def process_video_and_stream(
 
     # Create a video agent instance
     agent = VideoAgent(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-pro-exp-03-25",
         on_stream=on_stream,
         user_id=user_id,
         message_id=message_id,
