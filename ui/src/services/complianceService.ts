@@ -1,7 +1,10 @@
 // API service for compliance-related operations
 
+// REMIND ME TO CHANGE THIS WHEN DEPLOYING
+// PROD: https://brandcompliance.onrender.com/
+
 // Base URL for the API
-export const API_BASE_URL = "http://127.0.0.1:8000";
+export const API_BASE_URL = "https://brandcompliance.onrender.com/";
 
 // Interface for authentication response
 interface AuthResponse {
