@@ -4,7 +4,7 @@
 // PROD: https://brandcompliance.onrender.com/
 
 // Base URL for the API
-export const API_BASE_URL = "https://brandcompliance.onrender.com/";
+export const API_BASE_URL = "https://brandcompliance.onrender.com";
 
 // Interface for authentication response
 interface AuthResponse {
