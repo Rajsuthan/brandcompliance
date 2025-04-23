@@ -42,6 +42,7 @@ export function UploadGuidelinesModal({
   const [isOpen, setIsOpen] = useState(false);
   const [pdfs, setPdfs] = useState<PdfUpload[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [showUploadSuccessToast, setShowUploadSuccessToast] = useState(false);
   const handleFileSelect = async (file: File) => {
     const fileSizeMB = file.size / (1024 * 1024);
     const estimatedTime = formatTime(fileSizeMB * 6); // 3 seconds per MB
@@ -117,34 +118,88 @@ export function UploadGuidelinesModal({
         const pollProgress = async () => {
           let done = false;
           while (!done) {
-            const resp = await fetch(
-              `/api/brand-guidelines/${guidelineId}/progress`
-            );
-            if (resp.ok) {
-              const data = await resp.json();
+            try {
+              const resp = await fetch(
+                `/api/brand-guidelines/${guidelineId}/progress`
+              );
+              if (resp.ok) {
+                // Check if response is JSON
+                const contentType = resp.headers.get("content-type");
+                if (contentType && contentType.includes("application/json")) {
+                  const data = await resp.json();
+                  setPdfs((prev) =>
+                    prev.map((p, i) =>
+                      i === index
+                        ? {
+                            ...p,
+                            progress: data.progress,
+                            status:
+                              data.status === "done"
+                                ? "completed"
+                                : p.status === "error"
+                                ? "error"
+                                : "processing",
+                          }
+                        : p
+                    )
+                  );
+                  if (data.status === "done" || data.progress >= 100) {
+                    done = true;
+                  } else {
+                    await new Promise((r) => setTimeout(r, 500));
+                  }
+                } else {
+                  // Not JSON, but if progress is already 100, treat as completed
+                  setPdfs((prev) =>
+                    prev.map((p, i) =>
+                      i === index
+                        ? p.progress >= 90
+                          ? {
+                              ...p,
+                              status: "completed",
+                              error: undefined,
+                            }
+                          : {
+                              ...p,
+                              status: "error",
+                              error:
+                                "Unexpected server response. Please try again.",
+                            }
+                        : p
+                    )
+                  );
+                  done = true;
+                }
+              } else {
+                // If error, break polling
+                setPdfs((prev) =>
+                  prev.map((p, i) =>
+                    i === index
+                      ? {
+                          ...p,
+                          status: "error",
+                          error: `Server error (${resp.status}). Please try again.`,
+                        }
+                      : p
+                  )
+                );
+                done = true;
+              }
+            } catch (err) {
               setPdfs((prev) =>
                 prev.map((p, i) =>
                   i === index
                     ? {
                         ...p,
-                        progress: data.progress,
-                        status:
-                          data.status === "done"
-                            ? "completed"
-                            : p.status === "error"
-                            ? "error"
-                            : "processing",
+                        status: "error",
+                        error:
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to fetch progress.",
                       }
                     : p
                 )
               );
-              if (data.status === "done" || data.progress >= 100) {
-                done = true;
-              } else {
-                await new Promise((r) => setTimeout(r, 500));
-              }
-            } else {
-              // If error, break polling
               done = true;
             }
           }
@@ -195,15 +250,42 @@ export function UploadGuidelinesModal({
     setIsUploading(false);
     onUploadComplete?.();
 
-    // Close modal if all uploads are successful
+    // Show toast if all uploads are successful
     if (pdfs.every((pdf) => pdf.status === "completed")) {
+      setShowUploadSuccessToast(true);
+      setTimeout(() => setShowUploadSuccessToast(false), 4000);
       setIsOpen(false);
       setPdfs([]);
     }
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <>
+      {showUploadSuccessToast && (
+        <div
+          className="fixed bottom-6 left-1/2 transform -translate-x-1/2 max-w-md w-full bg-zinc-800 border border-green-500 rounded-lg shadow-lg z-50 transition-all duration-300 opacity-100"
+          style={{ pointerEvents: "none" }}
+        >
+          <div className="p-4 flex items-center gap-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5 text-green-400"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                clipRule="evenodd"
+              />
+            </svg>
+            <span className="text-green-400 font-semibold">
+              PDF{pdfs.length > 1 ? "s" : ""} uploaded successfully!
+            </span>
+          </div>
+        </div>
+      )}
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
         <Button variant="outline" className="border-zinc-700 hover:bg-zinc-800">
           Upload Brand Guidelines
@@ -404,5 +486,6 @@ export function UploadGuidelinesModal({
         </div>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
