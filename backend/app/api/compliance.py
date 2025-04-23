@@ -36,6 +36,10 @@ async def check_image_compliance(
     text: Optional[str] = Form("Analyze this image for brand compliance."),
     current_user: dict = Depends(get_current_user),
 ):
+    import inspect
+    print(f"[LOG] check_image_compliance: Start (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] check_image_compliance: Received file: {file.filename}, content_type: {file.content_type} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] check_image_compliance: User: {current_user.get('username', 'unknown')} (line {inspect.currentframe().f_lineno})")
     """
     Upload an image and check it for brand compliance.
 
@@ -45,8 +49,11 @@ async def check_image_compliance(
     3. Streams the results back to the client
     """
     # Validate file type
+    import inspect
     content_type = file.content_type or ""
+    print(f"[LOG] check_image_compliance: Validating file type: {content_type} (line {inspect.currentframe().f_lineno})")
     if not content_type.startswith("image/"):
+        print(f"[LOG] check_image_compliance: Invalid file type (line {inspect.currentframe().f_lineno})")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed",
@@ -56,15 +63,19 @@ async def check_image_compliance(
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=f".{content_type.split('/')[-1]}"
     ) as temp_file:
+        print(f"[LOG] check_image_compliance: Creating temp file at {temp_file.name} (line {inspect.currentframe().f_lineno})")
         # Write the uploaded file content to the temporary file
         shutil.copyfileobj(file.file, temp_file)
         temp_file_path = temp_file.name
 
     try:
+        print(f"[LOG] check_image_compliance: Encoding image to base64 (line {inspect.currentframe().f_lineno})")
         # Get the base64 encoding of the image
         image_base64, media_type = encode_image_to_base64(temp_file_path)
+        print(f"[LOG] check_image_compliance: Encoded image, media_type: {media_type} (line {inspect.currentframe().f_lineno})")
 
         # Create a streaming response
+        print(f"[LOG] check_image_compliance: Creating StreamingResponse (line {inspect.currentframe().f_lineno})")
         return StreamingResponse(
             process_image_and_stream(
                 image_base64=image_base64,
@@ -75,6 +86,7 @@ async def check_image_compliance(
             media_type="text/event-stream",
         )
     except Exception as e:
+        print(f"[LOG] check_image_compliance: Exception occurred: {e} (line {inspect.currentframe().f_lineno})")
         # Handle any errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -83,12 +95,19 @@ async def check_image_compliance(
     finally:
         # Clean up the temporary file
         if os.path.exists(temp_file_path):
+            print(f"[LOG] check_image_compliance: Deleting temp file {temp_file_path} (line {inspect.currentframe().f_lineno})")
             os.unlink(temp_file_path)
 
 
 async def process_image_and_stream(
     image_base64: str, media_type: str, text: str, user_id: str
 ):
+    import inspect
+    print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})")
     """
     Process an image using the compliance agent and stream the results.
 
@@ -113,14 +132,12 @@ async def process_image_and_stream(
 
     # Get user feedback to include in the system prompt
     user_feedback_list = get_user_feedback(user_id)
+    print(f"[LOG] process_image_and_stream: Retrieved {len(user_feedback_list) if user_feedback_list else 0} user feedback items (line {inspect.currentframe().f_lineno})")
 
     # Prepare custom system prompt with user feedback if available
     custom_system_prompt = system_prompt
     if user_feedback_list and len(user_feedback_list) > 0:
-        print(
-            f"\n🧠 [USER MEMORIES] Found {len(user_feedback_list)} feedback items for user {user_id}"
-        )
-
+        print(f"[LOG] process_image_and_stream: Adding user feedback to system prompt (line {inspect.currentframe().f_lineno})")
         feedback_section = "\n\n<User Memories and Feedback> !IMPORTANT! \n This is feedback given by the user in previous compliance checks. You need to make sure to acknolwedge your knowledge of these feedback in your initial detailed plan and say that you will follow them \n"
         for i, feedback in enumerate(user_feedback_list):
             feedback_content = feedback["content"]
@@ -128,15 +145,16 @@ async def process_image_and_stream(
             feedback_section += (
                 f"- Memory {i+1} ({feedback_date}): {feedback_content}\n"
             )
-            print(f"🧠 [MEMORY {i+1}] {feedback_content}")
+            print(f"[LOG] process_image_and_stream: Feedback {i+1}: {feedback_content} (line {inspect.currentframe().f_lineno})")
 
         # Add feedback section to system prompt
         custom_system_prompt = system_prompt + feedback_section
-        print(f"🧠 [SYSTEM PROMPT] Added user memories to system prompt")
+        print(f"[LOG] process_image_and_stream: System prompt updated with user feedback (line {inspect.currentframe().f_lineno})")
     else:
-        print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")
+        print(f"[LOG] process_image_and_stream: No user feedback found (line {inspect.currentframe().f_lineno})")
 
     # Create an agent instance
+    print(f"[LOG] process_image_and_stream: Instantiating Agent with model claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
     agent = Agent(
         model="claude-3-5-sonnet-20241022",
         on_stream=on_stream,
@@ -151,8 +169,10 @@ async def process_image_and_stream(
         "media_type": media_type,
         "text": text,
     }
+    print(f"[LOG] process_image_and_stream: Created image_message dict (line {inspect.currentframe().f_lineno})")
 
     # Process the message with image in a separate task
+    print(f"[LOG] process_image_and_stream: Creating processing_task (line {inspect.currentframe().f_lineno})")
     processing_task = asyncio.create_task(agent.process_message(image_message))
 
     # Stream the results

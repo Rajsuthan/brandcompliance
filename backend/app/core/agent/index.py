@@ -7,6 +7,7 @@ import mimetypes
 from typing import List, Dict, Any, Optional, Callable
 from uuid import uuid4
 from pydantic import BaseModel
+import inspect
 
 # Add the project root to the Python path
 # Get the absolute path of the current file
@@ -82,7 +83,6 @@ class Agent:
         self.system_prompt = system_prompt
 
     async def container_on_stream(self, data: Dict[str, Any]):
-        """Handle streaming data"""
         print(
             f"\n🔄 === Streaming Event ===\nType: {data['type']}\nContent: {data['content']}\n================"
         )
@@ -95,36 +95,23 @@ class Agent:
         return data
 
     async def add_message(self, role: str, content: Any):
-        """Add a message to the conversation history"""
         if isinstance(content, str):
             message = {"role": role, "content": content}
-        else:  # Assume content is a list of dicts
+        else:
             message = {"role": role, "content": content}
         self.messages.append(message)
 
     async def process_message(
         self, user_input: str | List[Dict[str, Any]] | Dict[str, Any]
     ) -> tuple[str, List[Dict]]:
-        """
-        Process a user message and return the final response.
-
-        Args:
-            user_input: Can be:
-                - A string (text-only message)
-                - A list of content objects (for messages with images)
-                - A dict containing image data and text
-        """
         print("📝 Current messages ----->")
         print(self.messages)
 
-        # Handle different types of user input
         if isinstance(user_input, dict) and "image_base64" in user_input:
-            # Extract image data and text from the dict
             image_base64 = user_input.get("image_base64", "")
             media_type = user_input.get("media_type", "image/png")
             text = user_input.get("text", "Analyze this image.")
 
-            # Format the message with image and text
             formatted_message = [
                 {
                     "type": "image",
@@ -139,11 +126,8 @@ class Agent:
                     "text": text,
                 },
             ]
-
-            # Add the formatted message to the conversation
             await self.add_message("user", formatted_message)
         else:
-            # Add the user message to the conversation as is
             await self.add_message("user", user_input)
         final_response = ""
 
@@ -152,13 +136,11 @@ class Agent:
             self.text_response = ""
             self.full_assistant_content = []
 
-            # Model switching logic for 429 errors
             available_models = [
                 "claude-3-5-sonnet-20241022",
                 "claude-3-7-sonnet-20250219",
                 "claude-3-5-haiku-20241022",
             ]
-            # Start with self.model if present, else use the first in the list
             if self.model in available_models:
                 model_order = [self.model] + [m for m in available_models if m != self.model]
             else:
@@ -175,10 +157,9 @@ class Agent:
                         available_tools=self.available_tools,
                         system_prompt=self.system_prompt if self.system_prompt else None,
                     )
-                    self.model = model_name  # Update to the working model
+                    self.model = model_name
                     break
                 except Exception as e:
-                    # Check for 429 error
                     if hasattr(e, "status_code") and getattr(e, "status_code", None) == 429:
                         print(f"Model {model_name} hit 429. Trying next model...")
                         last_exception = e
@@ -190,14 +171,12 @@ class Agent:
                     else:
                         raise
             else:
-                # If all models fail, raise the last exception
                 if last_exception:
                     raise last_exception
                 else:
                     raise RuntimeError("All models failed for unknown reasons.")
 
             if self.text_response:
-                # Only include type and text for text content
                 self.full_assistant_content.append(
                     {"type": "text", "text": self.text_response}
                 )
@@ -212,7 +191,6 @@ class Agent:
                         tool_data.update(
                             {"user_id": self.user_id, "message_id": self.message_id}
                         )
-                        # Only include fields relevant to tool_use
                         tool_content = {
                             "type": "tool_use",
                             "id": tool_use_id,
@@ -228,14 +206,10 @@ class Agent:
                         media_type = user_input.get("media_type", "image/png")
                         text = user_input.get("text", "Analyze this image.")
 
-                        # Extract image dimensions if available
                         image_dimensions = {}
                         if image_base64:
                             try:
-                                # Decode the base64 string into binary data
                                 image_data = base64.b64decode(image_base64)
-
-                                # Open the image using PIL to get dimensions
                                 from PIL import Image
                                 from io import BytesIO
 
@@ -256,14 +230,11 @@ class Agent:
                         tool_result = await tool_func(tool_input)
                         print("🔧 Tool called ✅")
 
-                        # Parse the stringified JSON result
                         tool_result_dict = json.loads(tool_result)
 
-                        # Create a copy without base64 for the message
                         message_tool_result = tool_result_dict.copy()
                         if isinstance(message_tool_result, dict):
                             message_tool_result["base64"] = ""
-                            # Add image dimensions to the message tool result
                             message_tool_result["image_dimensions"] = image_dimensions
 
                         user_message_to_add = [
@@ -277,37 +248,19 @@ class Agent:
                         print(f"📊 Tool result: {tool_result_dict}")
 
                         if tool_result_dict.get("base64"):
-                            # Compress the base64 data
                             base64_data = tool_result_dict.get("base64", "")
 
                             def compress_base64_image(image_base64, quality=60):
-                                """
-                                Compress a base64-encoded image
-
-                                Args:
-                                    image_base64 (str): Base64-encoded image data
-                                    quality (int, optional): JPEG quality. Defaults to 70.
-
-                                Returns:
-                                    str: Compressed base64-encoded image data
-                                """
                                 from io import BytesIO
                                 from PIL import Image
 
-                                # Decode the base64 string into binary data
                                 image_data = base64.b64decode(image_base64)
-
-                                # Open the image using PIL
                                 image = Image.open(BytesIO(image_data))
 
-                                # Compress the image and save it to a BytesIO object
                                 with BytesIO() as output:
                                     image.save(output, format="JPEG", quality=quality)
-
-                                    # Get the compressed image data from the BytesIO object
                                     compressed_image_data = output.getvalue()
 
-                                # Re-encode the compressed image to base64
                                 compressed_image_base64 = base64.b64encode(
                                     compressed_image_data
                                 ).decode("utf-8")
@@ -321,13 +274,12 @@ class Agent:
                                     "type": "image",
                                     "source": {
                                         "type": "base64",
-                                        "media_type": "image/jpeg",  # Assuming JPEG
+                                        "media_type": "image/jpeg",
                                         "data": compressed_image_base64,
                                     },
                                 },
                             )
 
-                        # Only include fields relevant to tool_result
                         await self.add_message(
                             "user",
                             user_message_to_add,
@@ -336,7 +288,6 @@ class Agent:
                         if tool_name == "attempt_completion":
                             final_response = self.text_response or tool_result
                             break
-                        # continue
                     else:
                         break
                 except json.JSONDecodeError:
@@ -352,7 +303,6 @@ class Agent:
         ):
             await self.add_message("assistant", self.full_assistant_content)
 
-        # Store the messages in a json file
         with open("messages.json", "w") as f:
             json.dump(self.messages, f, indent=4)
 
