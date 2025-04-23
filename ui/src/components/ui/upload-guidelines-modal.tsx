@@ -19,7 +19,7 @@ interface PdfUpload {
   file: File;
   brandName: string;
   description?: string;
-  status: "pending" | "uploading" | "completed" | "error";
+  status: "pending" | "uploading" | "processing" | "completed" | "error";
   progress: number;
   error?: string;
   estimatedTime?: string;
@@ -85,33 +85,79 @@ export function UploadGuidelinesModal({
     );
 
     try {
-      // Simulate upload progress
-      const progressInterval = setInterval(() => {
-        setPdfs((prev) =>
-          prev.map((p, i) =>
-            i === index
-              ? {
-                  ...p,
-                  progress: p.progress >= 90 ? 90 : p.progress + 10,
-                }
-              : p
-          )
-        );
-      }, 500);
+      // Track the guideline ID after upload
+      let guidelineId: string | null = null;
 
+      // Track upload progress
       await uploadBrandGuideline(
         pdf.file,
         pdf.brandName,
         authToken,
-        pdf.description
-      );
+        pdf.description,
+        (progress) => {
+          setPdfs((prev) =>
+            prev.map((p, i) =>
+              i === index ? { ...p, progress: Math.min(progress, 99) } : p
+            )
+          );
+        }
+      ).then((res) => {
+        // Save the guideline ID for polling
+        guidelineId = res.guideline?.id;
+      });
 
-      clearInterval(progressInterval);
-      setPdfs((prev) =>
-        prev.map((p, i) =>
-          i === index ? { ...p, status: "completed", progress: 100 } : p
-        )
-      );
+      // After upload, poll backend for processing progress
+      if (guidelineId) {
+        setPdfs((prev) =>
+          prev.map((p, i) =>
+            i === index ? { ...p, status: "processing", progress: 99 } : p
+          )
+        );
+
+        const pollProgress = async () => {
+          let done = false;
+          while (!done) {
+            const resp = await fetch(
+              `/api/brand-guidelines/${guidelineId}/progress`
+            );
+            if (resp.ok) {
+              const data = await resp.json();
+              setPdfs((prev) =>
+                prev.map((p, i) =>
+                  i === index
+                    ? {
+                        ...p,
+                        progress: data.progress,
+                        status:
+                          data.status === "done"
+                            ? "completed"
+                            : p.status === "error"
+                            ? "error"
+                            : "processing",
+                      }
+                    : p
+                )
+              );
+              if (data.status === "done" || data.progress >= 100) {
+                done = true;
+              } else {
+                await new Promise((r) => setTimeout(r, 500));
+              }
+            } else {
+              // If error, break polling
+              done = true;
+            }
+          }
+        };
+        await pollProgress();
+      } else {
+        // If no guidelineId, just mark as completed
+        setPdfs((prev) =>
+          prev.map((p, i) =>
+            i === index ? { ...p, status: "completed", progress: 100 } : p
+          )
+        );
+      }
     } catch (err) {
       setPdfs((prev) =>
         prev.map((p, i) =>

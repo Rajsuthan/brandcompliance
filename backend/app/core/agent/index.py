@@ -152,14 +152,49 @@ class Agent:
             self.text_response = ""
             self.full_assistant_content = []
 
-            response, reason = await llm(
-                model=self.model,
-                messages=self.messages,
-                on_stream=self.on_stream,
-                on_stop=self.on_stop,
-                available_tools=self.available_tools,
-                system_prompt=self.system_prompt if self.system_prompt else None,
-            )
+            # Model switching logic for 429 errors
+            available_models = [
+                "claude-3-7-sonnet-20250219",
+                "claude-3-5-haiku-20241022",
+                "claude-3-opus-20240229",
+            ]
+            # Start with self.model if present, else use the first in the list
+            if self.model in available_models:
+                model_order = [self.model] + [m for m in available_models if m != self.model]
+            else:
+                model_order = available_models
+
+            last_exception = None
+            for model_name in model_order:
+                try:
+                    response, reason = await llm(
+                        model=model_name,
+                        messages=self.messages,
+                        on_stream=self.on_stream,
+                        on_stop=self.on_stop,
+                        available_tools=self.available_tools,
+                        system_prompt=self.system_prompt if self.system_prompt else None,
+                    )
+                    self.model = model_name  # Update to the working model
+                    break
+                except Exception as e:
+                    # Check for 429 error
+                    if hasattr(e, "status_code") and getattr(e, "status_code", None) == 429:
+                        print(f"Model {model_name} hit 429. Trying next model...")
+                        last_exception = e
+                        continue
+                    elif "429" in str(e) or "Too Many Requests" in str(e):
+                        print(f"Model {model_name} hit 429. Trying next model...")
+                        last_exception = e
+                        continue
+                    else:
+                        raise
+            else:
+                # If all models fail, raise the last exception
+                if last_exception:
+                    raise last_exception
+                else:
+                    raise RuntimeError("All models failed for unknown reasons.")
 
             if self.text_response:
                 # Only include type and text for text content
@@ -330,7 +365,7 @@ async def test():
         print(f"\n=== Stream ===\n{data['type']} -> {data['content']}\n=============")
 
     agent = Agent(
-        model="claude-3-7-sonnet-20250219",
+        model="claude-3-haiku-20240307",
         on_stream=print_stream,
         user_id="test_user",
         message_id="test_message",

@@ -1,7 +1,7 @@
 // API service for compliance-related operations
 
 // Base URL for the API
-export const API_BASE_URL = "https://brandcompliance.onrender.com";
+export const API_BASE_URL = "http://127.0.0.1:8000";
 
 // Interface for authentication response
 interface AuthResponse {
@@ -20,6 +20,7 @@ interface VideoComplianceRequest {
   video_url?: string;
   message?: string;
   analysis_modes?: string[];
+  brand_name?: string; // Added brand name field
 }
 
 // Interface for video upload response
@@ -304,7 +305,8 @@ export const checkVideoCompliance = (
   text: string = "Analyze this video for brand compliance.",
   token: string,
   onEvent: (event: ComplianceEvent) => void,
-  analysisModes: string[] = ["visual", "brand_voice", "tone"]
+  analysisModes: string[] = ["visual", "brand_voice", "tone"],
+  brandName: string = "" // Added brand name parameter with default empty string
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     // Helper function to process event data
@@ -347,6 +349,7 @@ export const checkVideoCompliance = (
           video_url: videoFile as string,
           message: text,
           analysis_modes: analysisModes,
+          brand_name: brandName, // Include brand name in the request
         };
       } else {
         // Handle file upload by first uploading to R2
@@ -371,6 +374,7 @@ export const checkVideoCompliance = (
             video_url: uploadResult.url || uploadResult.filename,
             message: text,
             analysis_modes: analysisModes,
+            brand_name: brandName, // Include brand name in the request
           };
         } catch (error) {
           throw new Error(`Failed to upload video: ${error}`);

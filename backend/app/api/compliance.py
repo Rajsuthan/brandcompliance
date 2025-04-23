@@ -138,7 +138,7 @@ async def process_image_and_stream(
 
     # Create an agent instance
     agent = Agent(
-        model="claude-3-7-sonnet-20250219",
+        model="claude-3-5-sonnet-20241022",
         on_stream=on_stream,
         user_id=user_id,
         message_id=message_id,
@@ -157,6 +157,10 @@ async def process_image_and_stream(
 
     # Stream the results
     try:
+        # Buffer for tool content
+        tool_buffer = ""
+        tool_buffering = False
+
         while True:
             try:
                 # Get data from the queue with a timeout
@@ -170,6 +174,21 @@ async def process_image_and_stream(
                         # Format as a server-sent event
                         event_data = f"data: {data['type']}:{content}\n\n"
                         yield event_data
+                elif data["type"] == "tool":
+                    # Buffer tool content until valid JSON
+                    tool_buffer += data["content"]
+                    tool_buffering = True
+                    try:
+                        # Try to parse the buffer as JSON
+                        parsed = json.loads(tool_buffer)
+                        # If successful, yield and reset buffer
+                        event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                        yield event_data
+                        tool_buffer = ""
+                        tool_buffering = False
+                    except Exception:
+                        # Not yet valid JSON, keep buffering
+                        pass
                 else:
                     # Format as a server-sent event
                     event_data = f"data: {data['type']}:{data['content']}\n\n"

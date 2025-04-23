@@ -55,7 +55,7 @@ async def validate_video_file(file_path):
     except Exception as e:
         return False, str(e)
 
-def calculate_frame_similarity(frame1, frame2, threshold=0.8):
+def calculate_frame_similarity(frame1, frame2, threshold=0.5):
     gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
     size = (200, 200)
@@ -92,7 +92,7 @@ async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=
         if last_timestamp < 0 or (timestamp - last_timestamp) >= fixed_interval:
             is_unique = True
             if prev_frame is not None:
-                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.6)
+                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.5)
                 if is_similar:
                     is_unique = False
             if is_unique:
