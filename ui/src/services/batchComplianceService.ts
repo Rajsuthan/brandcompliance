@@ -199,7 +199,7 @@ export const processBatchMedia = async (
             item.isVideo,
             item.brandName,
             token,
-            (id, event) => onItemEvent(item.id, event)
+            (_, event) => onItemEvent(item.id, event)
           ).catch(error => {
             console.error(`Error processing ${item.id}:`, error);
             // Signal error to UI

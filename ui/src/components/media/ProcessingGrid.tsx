@@ -235,7 +235,7 @@ export const ProcessingGrid: React.FC<ProcessingGridProps> = ({
                     )}
                     
                     {/* Reference for scrolling */}
-                    <div ref={el => stepsEndRefs.current[itemIndex] = el} />
+                    <div ref={el => { stepsEndRefs.current[itemIndex] = el; }} />
                   </div>
                 </div>
               )}
