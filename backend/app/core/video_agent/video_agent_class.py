@@ -696,5 +696,5 @@ async def test():
     print(f"\n=== Final Results ===\n{json.dumps(results, indent=2)}")
 
 
-if __name__ == "__main__":
-    asyncio.run(test())
+# if __name__ == "__main__":
+#     asyncio.run(test())

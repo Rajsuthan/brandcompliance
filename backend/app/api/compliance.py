@@ -173,7 +173,13 @@ async def process_image_and_stream(
 
     # Process the message with image in a separate task
     print(f"[LOG] process_image_and_stream: Creating processing_task (line {inspect.currentframe().f_lineno})")
-    processing_task = asyncio.create_task(agent.process_message(image_message))
+    try:
+        processing_task = asyncio.create_task(agent.process_message(image_message))
+    except Exception as e:
+        print(f"[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})")
+        import traceback
+        traceback.print_exc()
+        raise
 
     # Stream the results
     try:
@@ -185,55 +191,80 @@ async def process_image_and_stream(
             try:
                 # Get data from the queue with a timeout
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                print(f"[LOG] process_image_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
 
                 # Filter out XML content from the data
                 if data["type"] == "text":
                     # Check if the content contains XML tags
                     content = data["content"]
+                    print(f"[LOG] process_image_and_stream: Handling text content: {content} (line {inspect.currentframe().f_lineno})")
                     if not (content.strip().startswith("<") and ">" in content):
                         # Format as a server-sent event
                         event_data = f"data: {data['type']}:{content}\n\n"
+                        print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                         yield event_data
                 elif data["type"] == "tool":
                     # Buffer tool content until valid JSON
                     tool_buffer += data["content"]
                     tool_buffering = True
+                    print(f"[LOG] process_image_and_stream: Buffering tool content: {tool_buffer} (line {inspect.currentframe().f_lineno})")
                     try:
                         # Try to parse the buffer as JSON
                         parsed = json.loads(tool_buffer)
                         # If successful, yield and reset buffer
                         event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                        print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                         yield event_data
                         tool_buffer = ""
                         tool_buffering = False
-                    except Exception:
+                    except Exception as e:
+                        print(f"[LOG] process_image_and_stream: Tool buffer not yet valid JSON: {e} (line {inspect.currentframe().f_lineno})")
                         # Not yet valid JSON, keep buffering
                         pass
                 else:
                     # Format as a server-sent event
                     event_data = f"data: {data['type']}:{data['content']}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding other event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                     yield event_data
 
                 # Mark the item as processed
                 queue.task_done()
+                print(f"[LOG] process_image_and_stream: Marked queue item as done (line {inspect.currentframe().f_lineno})")
             except asyncio.TimeoutError:
+                print(f"[LOG] process_image_and_stream: Timeout waiting for queue item (line {inspect.currentframe().f_lineno})")
                 # Check if the processing task is done
                 if processing_task.done():
+                    print(f"[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})")
                     # Get the final result
-                    final_response, messages = processing_task.result()
+                    try:
+                        final_response, messages = processing_task.result()
+                        print(f"[LOG] process_image_and_stream: Got final_response: {final_response} (line {inspect.currentframe().f_lineno})")
+                    except Exception as e:
+                        print(f"[ERROR] process_image_and_stream: Exception getting processing_task result: {e} (line {inspect.currentframe().f_lineno})")
+                        import traceback
+                        traceback.print_exc()
+                        raise
 
                     # Send a completion event
                     yield f"data: complete:{final_response}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielded completion event (line {inspect.currentframe().f_lineno})")
                     break
     except asyncio.CancelledError:
+        print(f"[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})")
         # Handle client disconnection
         if not processing_task.done():
             processing_task.cancel()
+        raise
+    except Exception as e:
+        print(f"[ERROR] process_image_and_stream: Exception in streaming loop: {e} (line {inspect.currentframe().f_lineno})")
+        import traceback
+        traceback.print_exc()
         raise
     finally:
         # Ensure the processing task is cancelled if not done
         if not processing_task.done():
             processing_task.cancel()
+        print(f"[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})")
 
 
 @router.post("/compliance/check-video")
