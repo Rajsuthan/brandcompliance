@@ -309,39 +309,39 @@ class Agent:
         return final_response, self.messages
 
 
-# Example usage
-async def test():
-    async def print_stream(data):
-        print(f"\n=== Stream ===\n{data['type']} -> {data['content']}\n=============")
+# # Example usage
+# async def test():
+#     async def print_stream(data):
+#         print(f"\n=== Stream ===\n{data['type']} -> {data['content']}\n=============")
 
-    agent = Agent(
-        model="claude-3-haiku-20240307",
-        on_stream=print_stream,
-        user_id="test_user",
-        message_id="test_message",
-        system_prompt=system_prompt,
-    )
+#     agent = Agent(
+#         model="claude-3-haiku-20240307",
+#         on_stream=print_stream,
+#         user_id="test_user",
+#         message_id="test_message",
+#         system_prompt=system_prompt,
+#     )
 
-    # Read the image file and convert it to base64
-    image_path = os.path.join(backend_dir, "app", "image.png")
-    image_data, media_type = encode_image_to_base64(image_path)
+#     # Read the image file and convert it to base64
+#     image_path = os.path.join(backend_dir, "app", "image.png")
+#     image_data, media_type = encode_image_to_base64(image_path)
 
-    # Create a dictionary with image data and text
-    image_message = {
-        "image_base64": image_data,
-        "media_type": media_type,
-        "text": "Can you check if this logo usage is compliant with the brand guidelines? Please identify the brand in the image first, then check its compliance.",
-    }
+#     # Create a dictionary with image data and text
+#     image_message = {
+#         "image_base64": image_data,
+#         "media_type": media_type,
+#         "text": "Can you check if this logo usage is compliant with the brand guidelines? Please identify the brand in the image first, then check its compliance.",
+#     }
 
-    # Process the message with image
-    response, messages = await agent.process_message(image_message)
+#     # Process the message with image
+#     response, messages = await agent.process_message(image_message)
 
-    print(f"\n=== Final Response ===\nResponse: {response}")
+#     print(f"\n=== Final Response ===\nResponse: {response}")
 
-    # Store the messages in a json file
-    with open("messages.json", "w") as f:
-        json.dump(messages, f, indent=4)
+#     # Store the messages in a json file
+#     with open("messages.json", "w") as f:
+#         json.dump(messages, f, indent=4)
 
 
-if __name__ == "__main__":
-    asyncio.run(test())
+# if __name__ == "__main__":
+#     asyncio.run(test())

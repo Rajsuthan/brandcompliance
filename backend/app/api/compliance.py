@@ -99,10 +99,10 @@ async def check_image_compliance(
             os.unlink(temp_file_path)
 
 
+import inspect
 async def process_image_and_stream(
     image_base64: str, media_type: str, text: str, user_id: str
 ):
-    import inspect
     print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
