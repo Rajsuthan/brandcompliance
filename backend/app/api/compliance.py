@@ -206,6 +206,7 @@ async def check_video_compliance(
     video_url: str = None,
     message: str = None,
     analysis_modes: str = None,
+    brand_name: str = None,
 ):
     """
     Check a video for brand compliance using its URL.
@@ -229,6 +230,7 @@ async def check_video_compliance(
             if analysis_modes
             else ["visual", "brand_voice", "tone"]
         )
+        # Keep brand_name as is from query parameters
     else:
         # POST method - extract from body
         if not data:
@@ -239,6 +241,7 @@ async def check_video_compliance(
         video_url = data.get("video_url")
         message = data.get("message", "Analyze this video for brand compliance.")
         analysis_modes = data.get("analysis_modes", ["visual", "brand_voice", "tone"])
+        brand_name = data.get("brand_name", brand_name)  # Extract brand_name from request body
 
     # Validate input
     if not video_url:
@@ -271,6 +274,7 @@ async def check_video_compliance(
                 message=message,
                 analysis_modes=analysis_modes,
                 user_id=current_user["id"],
+                brand_name=brand_name,
             ),
             media_type="text/event-stream",
         )
@@ -284,7 +288,7 @@ async def check_video_compliance(
 
 
 async def process_video_and_stream(
-    video_url: str, message: str, analysis_modes: List[str], user_id: str
+    video_url: str, message: str, analysis_modes: List[str], user_id: str, brand_name: str = None
 ):
     """
     Process a video using the video compliance agent and stream the results.
@@ -294,6 +298,7 @@ async def process_video_and_stream(
         message: Text prompt to send with the video
         analysis_modes: List of analysis modes to run
         user_id: ID of the current user
+        brand_name: Optional name of the brand being analyzed
 
     Yields:
         Server-sent events with the streaming results
@@ -313,6 +318,13 @@ async def process_video_and_stream(
 
     # Prepare custom system prompt with user feedback if available
     custom_system_prompt = gemini_system_prompt
+    
+    # Add brand name information to system prompt if provided
+    if brand_name:
+        print(f"\n🏷️ [BRAND INFO] Analyzing compliance for brand: {brand_name}")
+        brand_section = f"\n\n<Brand Information> !IMPORTANT!\nYou are analyzing content for the {brand_name} brand. Focus your analysis specifically on {brand_name}'s brand guidelines, visual identity, verbal identity, and overall compliance standards. When checking logos, colors, typography, and messaging, pay special attention to {brand_name}'s specific requirements and standards.\n"
+        custom_system_prompt += brand_section
+    
     if user_feedback_list and len(user_feedback_list) > 0:
         print(
             f"\n🧠 [USER MEMORIES] Found {len(user_feedback_list)} feedback items for user {user_id}"

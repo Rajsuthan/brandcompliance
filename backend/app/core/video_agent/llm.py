@@ -13,9 +13,11 @@ from app.core.video_agent.video_tools import (
 )
 import xmltodict
 from app.core.agent.prompt import gemini_system_prompt
+import numpy as np
+
 # from google.genai import types # Removed google.genai specific types
 # from google import genai # Removed google.genai client
-from openai import OpenAI # Added OpenAI client
+from openai import OpenAI  # Added OpenAI client
 import asyncio
 import base64
 import sys
@@ -289,118 +291,53 @@ def calculate_frame_similarity(frame1, frame2, threshold=0.8):
     return is_similar, score
 
 
-def extract_frames(video_path, interval=1, similarity_threshold=0.8):
-    """
-    Extract frames from a video and convert to base64.
-
-    Args:
-        video_path: Path to the video file
-        interval: Minimum interval between frames in seconds (default 1)
-        similarity_threshold: Threshold for determining if frames are similar (0.0-1.0)
-
-    Returns:
-        List of dictionaries containing timestamp and base64-encoded frames
-    """
-    print(f"🔍 Extracting frames from {video_path}")
-
-    # Check if file exists before trying to open
-    if not os.path.exists(video_path):
-        raise Exception(f"Video file not found at path: {video_path}")
-
-    frames = []
+async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=0.95):
+    """Maximum frame extraction for comprehensive compliance analysis"""
     cap = cv2.VideoCapture(video_path)
-
-    if not cap.isOpened():
-        raise Exception(f"Could not open video file {video_path}")
-
     fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    # Handle cases where FPS or total_frames might be invalid
-    if fps <= 0 or total_frames <= 0:
-        cap.release()
-        raise Exception(
-            f"Invalid video properties: FPS={fps}, TotalFrames={total_frames}"
-        )
-
-    duration = total_frames / fps
-
-    print(
-        f"📊 Video stats: {fps} FPS, {total_frames} total frames, {duration:.2f} seconds duration"
-    )
-
-    # Calculate how many frames to process per second
-    # For high FPS videos, we'll process more frames per second
-    frames_per_second = max(
-        1, min(int(fps / 10), 6)
-    )  # Process between 1-6 frames per second
-    frame_interval = max(1, int(fps / frames_per_second))
-
-    print(
-        f"🔄 Processing approximately {frames_per_second} frames per second (every {frame_interval} frames)"
-    )
-
+    frames = []
     frame_count = 0
-    last_added_frame = None
-    previous_timestamp = -1
-
-    while True:
+    
+    # Calculate total frames for progress reporting
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(f"Processing video with {total_frames} total frames")
+    
+    # Determine optimal sampling rate based on video length
+    # For compliance analysis, we want to capture frames frequently
+    video_length = total_frames / fps if fps > 0 else 0
+    
+    # Use a fixed small interval for maximum frame capture
+    # This ensures we don't miss any important brand elements
+    fixed_interval = initial_interval  # Default to 0.1 seconds between frames
+    
+    last_timestamp = -1
+    
+    while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-
-        # Process frame if it's at our calculated interval
-        if frame_count % frame_interval == 0:
-            # Calculate timestamp in seconds (with decimal precision)
-            timestamp = frame_count / fps
-
-            # Check if we should add this frame based on similarity and time interval
-            should_add = True
-
-            # If we have a previous frame, check similarity
-            if last_added_frame is not None:
-                # Always add a frame if we've moved to a new second (for backward compatibility)
-                if int(timestamp) > int(previous_timestamp):
-                    should_add = True
-                    print(
-                        f"🔄 Frame at {timestamp:.2f}s: Adding because it's in a new second"
-                    )
-                else:
-                    # Check similarity with the last added frame
-                    is_similar, similarity_score = calculate_frame_similarity(
-                        frame, last_added_frame, similarity_threshold
-                    )
-                    should_add = not is_similar
-
-                    if should_add:
-                        print(
-                            f"✅ Frame at {timestamp:.2f}s: Adding because similarity score ({similarity_score:.4f}) is below threshold ({similarity_threshold})"
-                        )
-                    else:
-                        print(
-                            f"❌ Frame at {timestamp:.2f}s: Skipping because similarity score ({similarity_score:.4f}) exceeds threshold ({similarity_threshold})"
-                        )
-
-            if should_add:
-                # Convert frame to base64
-                _, buffer = cv2.imencode(".jpg", frame)
-                base64_frame = base64.b64encode(buffer).decode("utf-8")
-
-                # Store with precise timestamp
-                frames.append({"timestamp": int(timestamp), "base64": base64_frame})
-
-                print(f"🖼️ Extracted frame at timestamp {int(timestamp)} seconds")
-
-                # Update tracking variables
-                last_added_frame = frame.copy()
-                previous_timestamp = timestamp
-            else:
-                print(f"⏭️ Skipped frame at timestamp {int(timestamp)} seconds")
-
+            
         frame_count += 1
+        timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        
+        # Progress reporting
+        if frame_count % 100 == 0:
+            progress = (frame_count / total_frames) * 100 if total_frames > 0 else 0
+            print(f"Processed {frame_count}/{total_frames} frames ({progress:.1f}%)")
+        
+        # Capture frame if it's at least fixed_interval seconds from the last captured frame
+        # This ensures we capture frames at regular intervals without missing anything
+        if last_timestamp < 0 or (timestamp - last_timestamp) >= fixed_interval:
+            # Encode and store frame
+            _, buffer = cv2.imencode('.jpg', frame)
+            frames.append({
+                'timestamp': timestamp,
+                'base64': base64.b64encode(buffer).decode('utf-8'),
+                'frame_number': frame_count
+            })
+            last_timestamp = timestamp
 
     cap.release()
-    print(f"✅ Extracted {len(frames)} frames from video")
     return frames
 
 
@@ -470,8 +407,8 @@ async def generate():
         if temp_dir_to_clean is None:  # It was a direct download
             temp_file_to_clean = video_path  # Mark the file itself for cleanup
 
-        frames = extract_frames(
-            video_path, interval=1, similarity_threshold=0.8
+        frames = await extract_frames(
+            video_path, initial_interval=1, similarity_threshold=0.8
         )  # Pass only the path
 
         # Initialize empty frame_captions
@@ -516,7 +453,9 @@ async def generate():
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
                 if "error" not in frame_captions:
-                    instruction_text += f" along with audio transcription for each timestamp."
+                    instruction_text += (
+                        f" along with audio transcription for each timestamp."
+                    )
                 else:
                     instruction_text += "."
             elif analysis_mode == "brand_voice":
@@ -526,7 +465,9 @@ async def generate():
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
                 if "error" not in frame_captions:
-                    instruction_text += f" along with audio transcription for each timestamp."
+                    instruction_text += (
+                        f" along with audio transcription for each timestamp."
+                    )
                 else:
                     instruction_text += "."
             elif analysis_mode == "tone":
@@ -536,7 +477,9 @@ async def generate():
                     f"I'm providing {len(frames)} frames from a {len(set(frame['timestamp'] for frame in frames))} second video"
                 )
                 if "error" not in frame_captions:
-                    instruction_text += f" along with audio transcription for each timestamp."
+                    instruction_text += (
+                        f" along with audio transcription for each timestamp."
+                    )
                 else:
                     instruction_text += "."
 
@@ -546,9 +489,13 @@ async def generate():
             if "error" not in frame_captions and frame_captions.get("frame_captions"):
                 transcription_text = "Video Transcription by Timestamp:\n"
                 transcription_items = []
-                for timestamp, caption_data in frame_captions.get("frame_captions", {}).items():
+                for timestamp, caption_data in frame_captions.get(
+                    "frame_captions", {}
+                ).items():
                     if caption_data.get("text"):
-                        transcription_items.append(f"[{timestamp}s]: {caption_data['text']}")
+                        transcription_items.append(
+                            f"[{timestamp}s]: {caption_data['text']}"
+                        )
 
                 if transcription_items:
                     transcription_text += "\n".join(transcription_items)
@@ -599,30 +546,38 @@ async def generate():
                         # Use client.chat.completions.create for streaming
                         response_stream = client.chat.completions.create(
                             model=model,
-                            messages=messages, # Pass the constructed messages list
+                            messages=messages,  # Pass the constructed messages list
                             stream=True,
                             # Pass other parameters directly if needed (e.g., temperature, max_tokens)
                             # temperature=1, # Example
-                            max_tokens=8192, # Example
+                            max_tokens=8192,  # Example
                             # stop=["</tool_code>"] # Example stop sequence if needed
                         )
 
                         for chunk in response_stream:
-                            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                            if (
+                                chunk.choices
+                                and chunk.choices[0].delta
+                                and chunk.choices[0].delta.content
+                            ):
                                 chunk_text = chunk.choices[0].delta.content
                                 print(f"📦 Chunk received: {chunk_text}")
                                 final_text += chunk_text
                             # Check for finish reason (OpenAI format)
                             if chunk.choices and chunk.choices[0].finish_reason:
-                                print(f"🏁 Stream finished with reason: {chunk.choices[0].finish_reason}")
-                                break # Exit inner loop on finish
+                                print(
+                                    f"🏁 Stream finished with reason: {chunk.choices[0].finish_reason}"
+                                )
+                                break  # Exit inner loop on finish
 
-                        streaming_successful = True # Assume success if loop completes or finishes cleanly
+                        streaming_successful = (
+                            True  # Assume success if loop completes or finishes cleanly
+                        )
 
                     except Exception as e:
                         retry_count += 1
-                        print(f"\nStream Error Type: {type(e).__name__}") # Debugging
-                        print(f"Stream Error Args: {e.args}") # Debugging
+                        print(f"\nStream Error Type: {type(e).__name__}")  # Debugging
+                        print(f"Stream Error Args: {e.args}")  # Debugging
                         if retry_count < max_retries:
                             print(
                                 f"\n⚠️ Streaming error (attempt {retry_count}/{max_retries}): {str(e)}"
@@ -809,30 +764,35 @@ async def generate():
                         # Execute tool function
                         tool_function = get_tool_function(json_tool_name)
                         tool_result = await tool_function(tool_input)
-                        tool_result_json = main_json.loads(tool_result) # Corrected indentation
+                        tool_result_json = main_json.loads(
+                            tool_result
+                        )  # Corrected indentation
 
                         print(f"\n{'='*50}")
                         print("⚙️ Tool Execution Results")
                         print(f"{'='*50}")
-                        print(f"Tool Result: {tool_result}") # Log tool result
+                        print(f"Tool Result: {tool_result}")  # Log tool result
 
                         # Update messages list (OpenAI format)
                         # 1. Add the assistant's response (which contained the tool call)
-                        messages.append({"role": "assistant", "content": content_to_process}) # Assuming content_to_process holds the raw XML tool call
+                        messages.append(
+                            {"role": "assistant", "content": content_to_process}
+                        )  # Assuming content_to_process holds the raw XML tool call
 
                         # 2. Add the tool result message
                         # Note: OpenAI expects tool calls/results differently, often via function calling mechanism.
                         # This simulates adding a user message with the tool output for the next turn.
                         # A more robust implementation might use OpenAI's tool/function calling features if the wrapper supports it.
                         # For now, adding as a user message containing the result string.
-                        messages.append({"role": "user", "content": f"Tool Result:\n{tool_result}"})
+                        messages.append(
+                            {"role": "user", "content": f"Tool Result:\n{tool_result}"}
+                        )
 
                         # If the tool result included an image, we might need a way to represent that.
                         # OpenAI's standard message format doesn't directly support tool results with images.
                         # We'll skip adding the image back into the conversation history for now.
                         # if tool_result_json.get("base64"):
                         #    print("⚠️ Image in tool result - cannot add back to OpenAI message history directly.")
-
 
                         if json_tool_name == "attempt_completion":
                             print(f"\n{'='*50}")

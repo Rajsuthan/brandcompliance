@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/7813e6cf-b425-4b2c-8519-3c2e6152f5f5.mp4",
+    "video_id": "7813e6cf-b425-4b2c-8519-3c2e6152f5f5.mp4",
+    "analysis_timestamp": "20250422_172838",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 51,
+    "video_duration_seconds": 51,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for In N Out brand compliance."
+  },
+  "results": {
+    "visual": "## Compliance Analysis for Video: In N Out Burger Commercial\n\n### Executive Summary\n\nThis video demonstrates partial compliance with In-N-Out Burger's brand guidelines. While the general aesthetic aligns with the brand's vintage feel, some inconsistencies in logo usage and color palette require attention.\n\nI analyzed the video, focusing on logo placement, color usage, and overall brand representation. Due to the limitations in available tools, I'm unable to fully assess font usage and some aspects of logo clarity.\n\n### Frame-by-Frame Analysis:\n\n*   **Timestamp 0:01 - 0:20:** The video focuses on the preparation of the burger. This aligns with In-N-Out's emphasis on fresh ingredients. No brand elements are visible during these sequences.\n*   **Timestamp 0:22:** The In-N-Out signage is shown.\n    *   Colors are consistent with brand guidelines (white text on red background, yellow arrow).\n    *   The overall design aligns with traditional In-N-Out signage.\n*   **Timestamp 0:23:** A burger with the fries is shown with the In-N-Out packaging logo.\n    *   The logo is partially obstructed, which isn't ideal, but the colors red and white are present which are consistent with brand guidelines.\n*   **Timestamp 0:34:** A person smiles with an In-N-Out Burger. There aren't any clear elements that violate the brand guidelines.\n*   **Timestamp 0:38:** Another image of the In-N-Out signage is shown.\n*   **Timestamp 0:40 - 0:58:** Text and logo placement occurs.\n    *   There is a facebook, instagram and X account, and a cartoon cow. This is not In-N-Out brand imagery.\n\n### Brand Guideline Compliance\n\n1.  **Logo Usage**\n    *Finding:* \u2705 Compliant with some issues\n    *Evidence:* In-N-Out signage is shown twice, and the In-N-Out packaging logo is shown, but obstructed.\n    *Guideline Reference:* In-N-Out Burger Brand Guidelines, Page 5\n\n2.  **Color Palette**\n    *Finding:* \u2705 Compliant\n    *Evidence:* At timestamp 0:22, 0:23, 0:34, and 0:38 red, white, and yellow are used, and those match the colors shown on page 5.\n    *Guideline Reference:* In-N-Out Burger Brand Guidelines, Page 5\n\n3.  **Imagery**\n    *Finding:* \u274c Non-Compliant\n    *Evidence:* At timestamp 0:40 - 0:58, there is a cartoon cow, which violates In-N-Out Burger brand guidelines\n    *Guideline Reference:* In-N-Out Burger Brand Guidelines, Page 5\n\n### Recommendation\n*I recommend removing the cartoon cow imagery to comply with the brand standards.*"
+  }
+}

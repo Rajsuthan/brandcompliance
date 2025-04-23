@@ -5,11 +5,110 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from dotenv import load_dotenv
 import logging
 import uuid
-from typing import Optional
+from typing import Optional, List, Dict
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Track upload progress
+class ProgressTracker:
+    def __init__(self, total_size):
+        self.total_size = total_size
+        self.uploaded = 0
+        self.lock = threading.Lock()
+        self.start_time = time.time()
+    
+    def update(self, chunk_size):
+        with self.lock:
+            self.uploaded += chunk_size
+            elapsed = time.time() - self.start_time
+            if elapsed > 0:
+                speed = self.uploaded / elapsed / 1024 / 1024  # MB/s
+                percentage = (self.uploaded / self.total_size) * 100
+                logger.info(f"Upload progress: {percentage:.1f}% ({speed:.2f} MB/s)")
+
+# Multipart upload functions
+async def upload_large_file(file, bucket, key, content_type):
+    """
+    Upload a large file to S3/R2 using multipart upload.
+    This allows for parallel uploads of chunks and better performance.
+    """
+    # Get file size
+    file.seek(0, 2)  # Seek to end
+    file_size = file.tell()
+    file.seek(0)  # Reset to beginning
+    
+    # Initialize multipart upload
+    mpu = s3_client.create_multipart_upload(
+        Bucket=bucket,
+        Key=key,
+        ContentType=content_type
+    )
+    
+    # 5MB chunks - AWS minimum chunk size
+    chunk_size = 5 * 1024 * 1024
+    total_chunks = (file_size + chunk_size - 1) // chunk_size
+    
+    # Create progress tracker
+    progress = ProgressTracker(file_size)
+    
+    # Upload parts in parallel
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor(max_workers=min(10, total_chunks))
+    upload_tasks = []
+    
+    for i in range(total_chunks):
+        start_pos = i * chunk_size
+        end_pos = min(start_pos + chunk_size, file_size)
+        upload_tasks.append(
+            loop.run_in_executor(
+                executor,
+                upload_part,
+                file, bucket, key, mpu['UploadId'], i+1, start_pos, end_pos, progress
+            )
+        )
+    
+    # Wait for all uploads to complete
+    parts = await asyncio.gather(*upload_tasks)
+    
+    # Complete the multipart upload
+    s3_client.complete_multipart_upload(
+        Bucket=bucket,
+        Key=key,
+        UploadId=mpu['UploadId'],
+        MultipartUpload={'Parts': sorted(parts, key=lambda x: x['PartNumber'])}
+    )
+    
+    return key
+
+def upload_part(file, bucket, key, upload_id, part_number, start_pos, end_pos, progress):
+    """Upload a single part of a multipart upload"""
+    # Create a file-like object for the chunk
+    file.seek(start_pos)
+    chunk = file.read(end_pos - start_pos)
+    
+    # Upload the part
+    response = s3_client.upload_part(
+        Bucket=bucket,
+        Key=key,
+        UploadId=upload_id,
+        PartNumber=part_number,
+        Body=chunk
+    )
+    
+    # Update progress
+    progress.update(len(chunk))
+    
+    # Return part info for completing the upload
+    return {
+        'PartNumber': part_number,
+        'ETag': response['ETag']
+    }
 
 # Load environment variables from .env file
 load_dotenv()
@@ -133,15 +232,45 @@ async def upload_video_to_r2(file: UploadFile = File(...)):
     )
 
     try:
-        # Upload the file stream directly to R2
-        s3_client.upload_fileobj(
-            file.file,  # The file-like object from UploadFile
-            R2_BUCKET_NAME,
-            unique_filename,
-            ExtraArgs={
-                "ContentType": file.content_type  # Set content type for proper serving
-            },
-        )
+        # Get file size if available
+        file_size = 0
+        try:
+            # FastAPI's UploadFile has a size attribute in newer versions
+            file_size = file.size
+        except AttributeError:
+            # If size attribute is not available, try to get it from content length
+            try:
+                file_size = int(file.headers.get("content-length", 0))
+            except (AttributeError, ValueError):
+                # If all else fails, we'll use the threshold-based approach
+                file_size = 0
+                
+        # Log the file size
+        logger.info(f"Uploading file of size: {file_size} bytes")
+        
+        # For large files (>10MB), use multipart upload
+        large_file_threshold = 10 * 1024 * 1024  # 10MB
+        
+        if file_size > large_file_threshold:
+            logger.info(f"Large file detected ({file_size} bytes). Using multipart upload.")
+            await upload_large_file(
+                file.file,
+                R2_BUCKET_NAME,
+                unique_filename,
+                file.content_type
+            )
+        else:
+            # For smaller files, use the simple upload method
+            logger.info(f"Small file detected. Using simple upload.")
+            s3_client.upload_fileobj(
+                file.file,  # The file-like object from UploadFile
+                R2_BUCKET_NAME,
+                unique_filename,
+                ExtraArgs={
+                    "ContentType": file.content_type  # Set content type for proper serving
+                },
+            )
+            
         logger.info(
             f"Successfully uploaded '{unique_filename}' to R2 bucket '{R2_BUCKET_NAME}'."
         )

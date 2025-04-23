@@ -1,8 +1,9 @@
-from typing import Literal, Callable, Awaitable
+from typing import Literal, Callable, Awaitable, Tuple
 from datetime import datetime
 import json
 import asyncio
 import os
+import re
 from dotenv import load_dotenv
 from openai import OpenAI, AsyncAzureOpenAI, AzureOpenAI
 from anthropic import AsyncAnthropic, Anthropic
@@ -48,6 +49,34 @@ models = [
 ]
 
 
+def validate_guideline_references(response: str) -> Tuple[bool, str]:
+    """
+    Validate that all compliance claims reference specific guideline sections.
+    Returns (is_valid, error_message) tuple.
+    """
+    # Check for forbidden phrases indicating external knowledge
+    forbidden_phrases = [
+        "typically", "usually", "most brands",
+        "common practice", "generally", "standard"
+    ]
+    
+    if any(phrase in response.lower() for phrase in forbidden_phrases):
+        return False, "Response contains general knowledge references"
+        
+    # Check for proper guideline citations
+    guideline_ref_patterns = [
+        r"section\s\d+\.\d+",  # e.g. "section 2.1"
+        r"page\s\d+",          # e.g. "page 42"
+        r"guideline\s#\d+"     # e.g. "guideline #3"
+    ]
+    
+    if not any(re.search(pattern, response.lower()) for pattern in guideline_ref_patterns):
+        if "not specified in guidelines" not in response.lower():
+            return False, "Missing specific guideline reference"
+    
+    return True, ""
+
+
 async def llm(
     model: Literal[
         "gemini-2.0-flash-exp",
@@ -81,11 +110,31 @@ async def llm(
     async_client = async_claude_client if "claude" in model else async_openai_client
 
     system_role = "user" if "o1" in model else "system"
+    original_prompt = system_prompt
     system_prompt = (
+        "You have access to the following tools:\n"
+        "```\n"
+        f"{json.dumps(available_tools, indent=2) if available_tools else 'None'}\n"
+        "```\n"
         f"Today's date: {datetime.now().strftime('%B %d, %Y')}\n"
-        + (str(system_prompt) if system_prompt else "")
-    ).replace(
-        "<tools>", f"<tools>\n{str(available_tools or available_tools)}\n</tools>\n"
+        "STRICT COMPLIANCE ANALYSIS RULES:\n"
+        "1. REFERENCE FORMAT - All claims MUST use:\n"
+        "   - 'Section X.Y' (e.g. Section 2.3)\n"
+        "   - 'Page N' (e.g. Page 15)\n"
+        "   - 'Guideline #N' (e.g. Guideline #5)\n"
+        "2. EXTERNAL KNOWLEDGE - NEVER use information about:\n"
+        "   - Common industry practices\n"
+        "   - Brand history/culture\n"
+        "   - Competitor examples\n"
+        "3. FORBIDDEN PHRASES - Avoid:\n"
+        "   - 'Typically', 'Usually', 'Commonly'\n"
+        "   - 'Most brands', 'Standard practice'\n"
+        "   - Any comparative statements\n"
+        "4. RESPONSE STRUCTURE - Required elements:\n"
+        "   [Claim] [Guideline Reference] [Exact Quote]\n"
+        "   Example: 'Logo position must be centered (Section 2.1: \"All logos...\")'\n\n"
+        "VALIDATION: Responses not meeting these requirements will be rejected.\n"
+        + (f"\n{original_prompt}" if original_prompt else "")
     )
 
     if not any(msg["role"] == "system" for msg in messages) and system_prompt:
@@ -250,6 +299,10 @@ async def llm(
                 model = models[current_index]
             else:
                 raise Exception(f"Failed after {max_errors} attempts: {str(e)}")
+
+    is_valid, error_message = validate_guideline_references(full_response)
+    if not is_valid:
+        raise Exception(f"Invalid response: {error_message}")
 
     raise Exception("Unexpected error: Loop completed without return")
 

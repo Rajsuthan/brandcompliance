@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/a5290598-0f3e-41b3-9850-b80860d1d980.mp4",
+    "video_id": "a5290598-0f3e-41b3-9850-b80860d1d980.mp4",
+    "analysis_timestamp": "20250423_103723",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 4,
+    "video_duration_seconds": 4,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for In N Out brand compliance."
+  },
+  "results": {
+    "visual": "## In-N-Out Burger Brand Compliance Analysis\n\n### Executive Summary\n\nBased on the available information, this video appears to be **\u274c Non-Compliant** with In-N-Out Burger's brand guidelines. The main reasons are that the video showcases a competitor, Burger King, and makes no attempt to align with the In-N-Out brand. I will keep in mind the feedback given by the user in the previous compliance checks during this analysis. \n\n### Details\n\n1. **Brand Representation:**\n   - The video prominently features a Burger King burger being assembled. This directly violates brand guidelines by promoting a competitor's product.\n   - There is no indication of any In-N-Out branding within the video content itself.\n\n2. **Visual Elements:**\n    - The visual style and aesthetic of the video do not align with In-N-Out's established brand identity.\n    - There is no color scheme or other brand element that suggests In-N-Out's involvement or endorsement.\n\n3. **Text Content**: \n   - If the video included any text (which it doesn't), that would likely violate brand guidelines too because it will promote the competitor.\n\n4. **Logo Usage**:\n    - There is no In-N-Out logo present in the video.\n\n5. **Counterfeit Logo**:\n    - The video does not feature a counterfeit Burger King logo\n\n6. **Inverted Videos**:\n    - The video is not inverted.\n\n### Conclusion\nThe video is non-compliant with In-N-Out Burger's brand guidelines due to the promotion of a competitor and the absence of any In-N-Out branding elements. The issues are significant enough to consider it a severe breach of brand compliance."
+  }
+}

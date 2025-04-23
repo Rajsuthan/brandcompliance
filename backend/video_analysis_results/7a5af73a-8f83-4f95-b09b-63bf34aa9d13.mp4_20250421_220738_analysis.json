@@ -1,0 +1,25 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/7a5af73a-8f83-4f95-b09b-63bf34aa9d13.mp4",
+    "video_id": "7a5af73a-8f83-4f95-b09b-63bf34aa9d13.mp4",
+    "analysis_timestamp": "20250421_220738",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 51,
+    "video_duration_seconds": 51,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for brand compliance, focusing on logo usage, colors, and tone of voice."
+  },
+  "results": {
+    "visual": {
+      "search_brand_guidelines": {
+        "brand_name": "In-N-Out Burger",
+        "query": "brand guidelines",
+        "tool_name": "search_brand_guidelines",
+        "task_detail": "Search IN-N-OUT BURGER Brand Guidelines"
+      },
+      "#text": "Okay, I will analyze the provided video for brand compliance with In-N-Out Burger's brand guidelines, paying close attention to logo usage, colors, and overall tone. Based on the feedback provided:\n\n*   I will be sure to address whether the logos are manipulated in any way, including inversion or blurring. (Memory 1, Memory 7)\n*   Given the possibility of this being a TikTok video, I will analyze the elements considering TikTok native aesthetics. (Memory 2, Memory 4)\n*   I will provide clear and decisive verdicts without ambiguity. (Memory 3)\n*   I will be mindful of the font detection limitations and consider that custom fonts might not be accurately captured. (Memory 5)\n*   I will check if the In-N-Out Burger logo used is counterfeit. (Memory 6)\n\n**Detailed Plan:**\n\n1.  **Research Brand Guidelines:** Use `search_brand_guidelines` to find the official In-N-Out Burger brand guidelines. If found, I will use `read_guideline_page` to review specific pages related to logo usage, color palettes, and tone of voice.\n2.  **Analyze Key Video Frames:** I will use `get_video_color_scheme` at different timestamps (e.g., beginning, middle, end) to identify the prominent colors. I will also pay attention to font usage using `get_video_fonts`.\n3.  **Check Logo Compliance:** At timestamps where the logo is visible, I will perform the following checks:\n    *   Use `get_region_color_scheme` to verify the logo's color against the brand guidelines.\n    *   Use `check_element_placement` to ensure correct logo placement and clear space.\n    *   Use `check_image_clarity` to assess for any blurring, distortion, or degradation, considering potential inversion.\n4.  **Evaluate Text Content:** If any text is present, I will use `check_text_grammar` to identify errors.\n5.  **Assess Overall Tone:** Based on the brand guidelines (if available) and visual analysis, I will evaluate whether the video's overall tone aligns with the brand's desired image.\n6.  **Formulate Detailed Verdict:** Finally, I will use `attempt_completion` to present a detailed compliance analysis result based on all the collected evidence.\n\nNow, let's start by finding the brand guidelines.\n\n```xml\n\n```"
+    }
+  }
+}

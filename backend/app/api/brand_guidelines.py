@@ -18,6 +18,9 @@ from bson.objectid import ObjectId
 from app.utils.pdf_to_image import pdf_to_image, get_pdf_page_count
 from app.utils.background_tasks import create_page_processing_task, get_task_status
 
+# In-memory progress tracking for guideline processing
+processing_progress = {}
+
 from app.core.auth import get_current_user
 from app.models.pdf import (
     BrandGuideline,
@@ -35,10 +38,16 @@ from app.db.database import (
     get_brand_guidelines_by_user,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
-@router.post("/brand-guidelines/upload", response_model=BrandGuidelineUploadResponse)
+from fastapi.responses import StreamingResponse
+import json
+
+@router.post("/brand-guidelines/upload")
 async def upload_brand_guideline(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -47,14 +56,7 @@ async def upload_brand_guideline(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Upload a brand guideline PDF and convert its pages to images.
-
-    This endpoint:
-    1. Accepts a PDF file upload
-    2. Saves the file temporarily
-    3. Processes each page using the pdf_to_image function
-    4. Stores metadata in the brand_guidelines collection
-    5. Stores each page's data in the guideline_pages collection
+    Upload a brand guideline PDF and stream progress as each page is processed.
     """
     # Validate file type
     if not file.filename.lower().endswith(".pdf"):
@@ -65,103 +67,69 @@ async def upload_brand_guideline(
 
     # Create a temporary file to store the uploaded PDF
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-        # Write the uploaded file content to the temporary file
         shutil.copyfileobj(file.file, temp_file)
         temp_file_path = temp_file.name
 
-    try:
-        # Get the total number of pages in the PDF
-        total_pages = get_pdf_page_count(temp_file_path)
-
-        if total_pages == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not process the PDF file. It may be corrupted or empty.",
-            )
-
-        # Create a brand guideline record in the database
-        guideline_data = {
-            "filename": file.filename,
-            "user_id": current_user["id"],
-            "brand_name": brand_name,
-            "total_pages": total_pages,
-            "description": description,
-        }
-
-        guideline_id = create_brand_guideline(guideline_data)
-
-        # Process the PDF pages
-        results = pdf_to_image(
-            pdf_path=temp_file_path,
-            include_base64=True,  # We need the base64 data for storage
-            verbose=False,  # Don't print status messages
+    # Get the total number of pages in the PDF
+    total_pages = get_pdf_page_count(temp_file_path)
+    if total_pages == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not process the PDF file. It may be corrupted or empty.",
         )
 
-        # Store each page in the database
-        pages_processed = 0
+    # Create a brand guideline record in the database
+    guideline_data = {
+        "filename": file.filename,
+        "user_id": current_user["id"],
+        "brand_name": brand_name,
+        "total_pages": total_pages,
+        "description": description,
+    }
+    guideline_id = create_brand_guideline(guideline_data)
 
-        # If results is a single dict (for single page PDFs), convert to list
-        if isinstance(results, dict):
-            results = [results]
+    from app.utils.pdf_to_image import pdf_to_image_fitz, PYMUPDF_AVAILABLE
+    from app.utils.background_tasks import process_guideline_page
 
+    async def event_stream():
+        # Extract pages as images
+        results = pdf_to_image_fitz(
+            pdf_path=temp_file_path,
+            include_base64=True,
+            dpi=100,
+            max_workers=None,
+            verbose=True
+        )
+        processed = 0
         for result in results:
-            print(f"Processing result: {result}")
             if result["success"]:
-                print(f"Result is successful for page {result['page']}")
-                # Create page data
-                page_data = {
-                    "guideline_id": guideline_id,
-                    "page_number": result["page"],
-                    "width": result["width"],
-                    "height": result["height"],
-                    "format": result["format"],
-                    "base64": result["base64"],
-                }
-                print(f"Created page data")
-
                 # Store page in database
-                page_id = create_guideline_page(page_data)
-                print(f"Stored page in database with ID")
-
-                # Process the page directly instead of creating a background task
-                from app.utils.background_tasks import process_guideline_page
-                from app.db.database import update_guideline_page_with_results
-                import asyncio
-
-                print("Imported required modules")
-
-                # Create page data with ID for processing
-                page_with_id = {
-                    "id": page_id,
-                    "guideline_id": guideline_id,
-                    "page_number": result["page"],
+                page_data = {
+                    "guideline_id": str(guideline_id),
+                    "page_number": result["page"] + 1,
                     "width": result["width"],
                     "height": result["height"],
-                    "format": result["format"],
-                    "base64": f"data:image/{result['format']};base64,{result['base64']}",  # Format as data URL
+                    "base64": result.get("base64", None)
                 }
-                print(f"Created page data with ID")
-
-                # Process the page directly (run the async function in the event loop)
-                print("Starting page processing...")
-                processing_result = await process_guideline_page(page_with_id)
-                print(f"Page processing complete.")
-
-                # Update the page in the database with the processing results
-                updated_page = update_guideline_page_with_results(
-                    page_id, processing_result
-                )
-                print(f"Updated page in database")
-
-                print(f"Processed page directly")
-
-                pages_processed += 1
-                print(f"Pages processed so far")
-
-        # Get the created guideline with ID
+                page_id = create_guideline_page(page_data)
+                # LLM processing
+                page_data_with_id = dict(page_data)
+                page_data_with_id["id"] = page_id
+                llm_result = await process_guideline_page(page_data_with_id)
+                from app.db.database import update_guideline_page_with_results
+                update_guideline_page_with_results(page_id, llm_result)
+                processed += 1
+                percent = int((processed / total_pages) * 100)
+                # Stream progress as JSON line
+                yield f"data: {json.dumps({'progress': percent, 'processed_pages': processed, 'total_pages': total_pages, 'guideline_id': str(guideline_id)})}\n\n"
+        # Final result
         guideline = get_brand_guideline(guideline_id)
+        # Convert datetime fields to ISO strings for JSON serialization
+        def iso(val):
+            if isinstance(val, datetime):
+                return val.isoformat()
+            return val
 
-        # Convert to response model
         guideline_response = {
             "id": guideline["id"],
             "filename": guideline["filename"],
@@ -169,26 +137,20 @@ async def upload_brand_guideline(
             "brand_name": guideline["brand_name"],
             "total_pages": guideline["total_pages"],
             "description": guideline.get("description"),
-            "created_at": guideline["created_at"],
-            "updated_at": guideline["updated_at"],
+            "created_at": iso(guideline["created_at"]),
+            "updated_at": iso(guideline["updated_at"]),
         }
+        yield f"data: {json.dumps({'progress': 100, 'status': 'done', 'guideline': guideline_response})}\n\n"
 
-        return {
-            "guideline": guideline_response,
-            "pages_processed": pages_processed,
-            "message": f"Successfully processed {pages_processed} pages of {guideline['filename']}",
-        }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    except Exception as e:
-        # Handle any errors
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing PDF: {str(e)}",
-        )
-    finally:
-        # Clean up the temporary file
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
+# Progress endpoint for frontend polling
+@router.get("/brand-guidelines/{guideline_id}/progress")
+async def get_guideline_processing_progress(guideline_id: str):
+    progress = processing_progress.get(str(guideline_id))
+    if not progress:
+        return {"status": "not_found", "progress": 0}
+    return progress
 
 
 @router.get("/brand-guidelines", response_model=List[BrandGuideline])

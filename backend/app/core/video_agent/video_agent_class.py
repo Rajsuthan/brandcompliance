@@ -2,13 +2,14 @@ import asyncio
 import os
 import json
 import shutil
+import tempfile
+import requests
+import urllib.parse
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Callable
 
-# Import the functions from the existing llm.py file
-from app.core.video_agent.llm import (
-    download_direct_video,
-    download_video,
+# Import the functions from the Gemini-based LLM implementation
+from app.core.video_agent.gemini_llm import (
     calculate_frame_similarity,
     extract_frames,
     get_frames_by_timestamp,
@@ -16,6 +17,8 @@ from app.core.video_agent.llm import (
 )
 
 from app.core.agent.prompt import gemini_system_prompt
+# import download_video
+from app.core.video_agent.llm import download_video
 
 # from google import genai # Removed google.genai client
 # from google.genai import types # Removed google.genai types
@@ -23,6 +26,59 @@ from openai import OpenAI  # Added OpenAI client
 import xmltodict
 from app.core.video_agent.video_tools import get_tool_function
 import re
+import numpy as np
+import base64
+import cv2
+
+
+async def download_video(video_url: str) -> tuple:
+    """
+    Download a video from a URL to a temporary file.
+    
+    Args:
+        video_url: URL of the video to download
+        
+    Returns:
+        Tuple containing (path to the downloaded video file, temporary directory)
+    """
+    print(f"📥 Downloading video from: {video_url}")
+    
+    try:
+        # Create a temporary directory for the video
+        temp_dir = tempfile.mkdtemp()
+        
+        # Generate a filename from the URL
+        video_filename = urllib.parse.unquote(os.path.basename(video_url)).split("?")[0]
+        if not video_filename or not video_filename.endswith((".mp4", ".mov", ".avi", ".webm")):
+            video_filename = f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            
+        # Create the full path for the video
+        video_path = os.path.join(temp_dir, video_filename)
+        
+        # Download the video
+        response = requests.get(video_url, stream=True)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        
+        # Write the content to the file
+        with open(video_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        
+        print(f"✅ Downloaded video to: {video_path}")
+        
+        # Check if file is valid
+        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+            raise ValueError("Downloaded video file is empty or does not exist")
+            
+        return (video_path, temp_dir)
+    
+    except Exception as e:
+        print(f"❌ Error downloading video: {str(e)}")
+        # Clean up the temporary directory if it was created
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        raise Exception(f"Failed to download video: {str(e)}")
 
 
 class VideoAgent:
@@ -126,8 +182,8 @@ class VideoAgent:
             self.video_path = video_path_tuple
             temp_dir = None
 
-        self.frames = extract_frames(
-            self.video_path, interval=1, similarity_threshold=0.8
+        self.frames = await extract_frames(
+            self.video_path, initial_interval=1, similarity_threshold=0.8
         )
 
         # Clean up the downloaded video file
@@ -186,6 +242,50 @@ class VideoAgent:
         # Return the results and filepath
         return {"results": self.all_analysis_results, "filepath": results_filepath}
 
+    def _parse_xml_manually(self, xml_content):
+        """
+        Manually parse XML content when standard parsing fails.
+        This is a fallback method to handle various XML formats.
+        
+        Args:
+            xml_content: The XML content to parse
+            
+        Returns:
+            Tuple of (is_xml, tool_name, xml_dict, content_to_process)
+        """
+        try:
+            # Find the root tag
+            root_tag_match = re.match(r"<([a-zA-Z0-9_]+)>", xml_content)
+            if not root_tag_match:
+                print("❌ Could not find root tag in XML content")
+                return False, None, None, None
+                
+            root_tag = root_tag_match.group(1)
+            print(f"🔍 Manual XML parsing - Root tag: {root_tag}")
+            
+            # Extract all child tags and their content
+            child_pattern = r"<([a-zA-Z0-9_]+)>(.*?)</\1>"
+            child_matches = re.findall(child_pattern, xml_content, re.DOTALL)
+            
+            if not child_matches:
+                print("❌ Could not find any child tags in XML content")
+                return False, None, None, None
+                
+            # Build a dictionary from the child tags
+            xml_dict = {root_tag: {}}
+            for tag, content in child_matches:
+                # Clean up the content (remove extra whitespace)
+                content = content.strip()
+                xml_dict[root_tag][tag] = content
+                print(f"📌 Found tag: {tag} with content: {content}")
+                
+            print(f"✅ Manual XML parsing successful: {json.dumps(xml_dict, indent=2)}")
+            return True, root_tag, xml_dict, xml_content
+            
+        except Exception as e:
+            print(f"❌ Error in manual XML parsing: {str(e)}")
+            return False, None, None, None
+            
     async def process_analysis_mode(
         self, analysis_mode: str, message: Optional[str] = None
     ):
@@ -364,31 +464,37 @@ class VideoAgent:
 
                 # Method 1: Use regex to find XML specifically within ```xml ... ``` blocks
                 xml_code_block_match = re.search(
-                    r"```xml\s*(.*?)\s*```", final_text, re.DOTALL | re.IGNORECASE
+                    r"```(?:xml)?\s*(.*?)\s*```", final_text, re.DOTALL | re.IGNORECASE
                 )
                 if xml_code_block_match:
                     try:
                         xml_content = xml_code_block_match.group(1).strip()
                         if xml_content.startswith("<") and xml_content.endswith(">"):
                             content_to_process = xml_content
-                            xml_dict = xmltodict.parse(xml_content)
-                            is_xml = True
-                            print(
-                                f"\n{'='*50}\n🔍 XML Processing Results (From ```xml Code Block Regex)\n{'='*50}"
-                            )
-                            print(f"📋 Extracted XML Content:\n{xml_content}")
-                            print(
-                                f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
-                            )
-                            json_tool_name = list(xml_dict.keys())[0]
+                            # Use a more robust XML parsing approach
+                            try:
+                                xml_dict = xmltodict.parse(xml_content)
+                                is_xml = True
+                                print(
+                                    f"\n{'='*50}\n🔍 XML Processing Results (From Code Block)\n{'='*50}"
+                                )
+                                print(f"📋 Extracted XML Content:\n{xml_content}")
+                                print(
+                                    f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
+                                )
+                                json_tool_name = list(xml_dict.keys())[0]
+                            except Exception as xml_parse_error:
+                                print(f"⚠️ XML parsing error: {str(xml_parse_error)}")
+                                # Try alternative parsing approach - manual extraction
+                                is_xml, json_tool_name, xml_dict, content_to_process = self._parse_xml_manually(xml_content)
                         else:
                             print(
-                                "⚠️ Content within ```xml block doesn't look like XML."
+                                "⚠️ Content within code block doesn't look like XML."
                             )
                             is_xml = False
                     except Exception as xml_error:
                         print(
-                            f"⚠️ Error parsing XML from ```xml code block: {str(xml_error)}"
+                            f"⚠️ Error processing code block: {str(xml_error)}"
                         )
                         is_xml = False
 
@@ -397,7 +503,8 @@ class VideoAgent:
                     print(
                         f"🔎 Attempting to extract XML directly from raw text (Method 2)"
                     )
-                    xml_pattern = r"<([a-zA-Z0-9_]+)>(.*?)</\1>"
+                    # More robust pattern to match XML with nested tags
+                    xml_pattern = r"<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>"
                     xml_matches = re.findall(xml_pattern, final_text, re.DOTALL)
                     if xml_matches:
                         try:
@@ -431,19 +538,29 @@ class VideoAgent:
                         try:
                             block = block.strip()
                             if block and block.startswith("<") and block.endswith(">"):
-                                xml_dict = xmltodict.parse(block)
-                                is_xml = True
-                                content_to_process = block
-                                json_tool_name = list(xml_dict.keys())[0]
-                                print(
-                                    f"\n{'='*50}\n🔍 XML Processing Results (From Any Code Block Regex - Method 3)\n{'='*50}"
-                                )
-                                print(f"📋 Extracted XML Content:\n{block}")
-                                print(
-                                    f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
-                                )
-                                break  # Found valid XML
+                                try:
+                                    # Try standard XML parsing first
+                                    xml_dict = xmltodict.parse(block)
+                                    is_xml = True
+                                    content_to_process = block
+                                    json_tool_name = list(xml_dict.keys())[0]
+                                    print(
+                                        f"\n{'='*50}\n🔍 XML Processing Results (From Any Code Block - Method 3)\n{'='*50}"
+                                    )
+                                    print(f"📋 Extracted XML Content:\n{block}")
+                                    print(
+                                        f"🧩 Parsed XML Content:\n{json.dumps(xml_dict, indent=2)}"
+                                    )
+                                    break  # Found valid XML
+                                except Exception as xml_parse_error:
+                                    print(f"⚠️ Standard XML parsing failed, trying manual parsing: {str(xml_parse_error)}")
+                                    # Try manual parsing as fallback
+                                    is_xml, json_tool_name, xml_dict, content_to_process = self._parse_xml_manually(block)
+                                    if is_xml:
+                                        print(f"✅ Manual parsing successful for Method 3")
+                                        break  # Found valid XML with manual parsing
                         except Exception as block_error:
+                            print(f"⚠️ Error processing code block: {str(block_error)}")
                             continue  # Ignore errors for non-XML blocks
 
                 # --- Check if XML was found and proceed ---
@@ -472,18 +589,43 @@ class VideoAgent:
                     and "timestamp" in tool_input
                 ):
                     timestamp = int(tool_input["timestamp"])
+                    
+                    # Get the original Base64 frames
                     frames_base64 = get_frames_by_timestamp(self.frames, timestamp)
-                    if len(frames_base64) == 1:
-                        tool_input["image_base64"] = frames_base64[0]
-                        print(f"🖼️ Added 1 frame at timestamp {timestamp} to tool input")
+                    
+                    # Apply compression to the Base64 images (30% compression)
+                    compressed_frames = []
+                    for frame_base64 in frames_base64:
+                        try:
+                            # Decode the Base64 image
+                            img_data = base64.b64decode(frame_base64)
+                            
+                            # Convert to numpy array
+                            nparr = np.frombuffer(img_data, np.uint8)
+                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            
+                            # Compress by using a lower JPEG quality (70%)
+                            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                            _, buffer = cv2.imencode('.jpg', img, encode_params)
+                            
+                            # Re-encode to Base64
+                            compressed_base64 = base64.b64encode(buffer).decode('utf-8')
+                            compressed_frames.append(compressed_base64)
+                        except Exception as e:
+                            print(f"⚠️ Could not compress frame: {str(e)}")
+                            # Fall back to the original frame
+                            compressed_frames.append(frame_base64)
+                    
+                    print(f"🔄 Applied 30% compression to frames at timestamp {timestamp}")
+                    
+                    # Add the compressed frames to tool input
+                    if len(compressed_frames) == 1:
+                        tool_input["image_base64"] = compressed_frames[0]
+                        print(f"🖼️ Added 1 compressed frame at timestamp {timestamp} to tool input")
                     else:
-                        tool_input["images_base64"] = frames_base64
-                        tool_input["image_base64"] = frames_base64[
-                            0
-                        ]  # Backward compatibility
-                        print(
-                            f"🖼️ Added {len(frames_base64)} frames at timestamp {timestamp} to tool input"
-                        )
+                        tool_input["images_base64"] = compressed_frames
+                        tool_input["image_base64"] = compressed_frames[0]  # Backward compatibility
+                        print(f"🖼️ Added {len(compressed_frames)} compressed frames at timestamp {timestamp} to tool input")
 
                 # Send tool event if callback is set
                 if self.on_stream:

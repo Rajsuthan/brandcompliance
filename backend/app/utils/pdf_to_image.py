@@ -11,6 +11,16 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, List, Optional, Union, Callable
 from PIL import Image
+import io
+import time
+
+# Import PyMuPDF (fitz) - make sure to install with: pip install PyMuPDF
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+    print("Warning: PyMuPDF not available. Using fallback methods for PDF processing.")
 
 
 def get_pdf_page_count(pdf_path: str) -> int:
@@ -23,8 +33,23 @@ def get_pdf_page_count(pdf_path: str) -> int:
     Returns:
         int: Number of pages in the PDF
     """
+    # Try using PyMuPDF first (fastest method)
+    if PYMUPDF_AVAILABLE:
+        try:
+            start_time = time.time()
+            pdf = fitz.open(pdf_path)
+            page_count = len(pdf)
+            pdf.close()
+            print(f"PyMuPDF: Got page count in {time.time() - start_time:.3f}s")
+            return page_count
+        except Exception as e:
+            print(f"PyMuPDF failed to get page count: {e}")
+            # Fall back to other methods
+            pass
+    
     try:
         # Try using pdfinfo to get page count
+        start_time = time.time()
         result = subprocess.run(
             ["pdfinfo", pdf_path],
             capture_output=True,
@@ -35,6 +60,7 @@ def get_pdf_page_count(pdf_path: str) -> int:
         # Parse the output to find the page count
         for line in result.stdout.split("\n"):
             if line.startswith("Pages:"):
+                print(f"pdfinfo: Got page count in {time.time() - start_time:.3f}s")
                 return int(line.split(":")[1].strip())
 
         raise ValueError("Could not find page count in pdfinfo output")
@@ -42,12 +68,181 @@ def get_pdf_page_count(pdf_path: str) -> int:
     except (subprocess.SubprocessError, ValueError, FileNotFoundError):
         # Try using PIL as fallback
         try:
+            start_time = time.time()
             with Image.open(pdf_path) as img:
                 if hasattr(img, "n_frames"):
+                    print(f"PIL: Got page count in {time.time() - start_time:.3f}s")
                     return img.n_frames
                 return 1
         except Exception:
             return 0
+
+
+def pdf_to_image_fitz(
+    pdf_path: str,
+    pages: Union[int, List[int], str] = "all",
+    dpi: int = 100,
+    include_base64: bool = False,
+    max_workers: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    verbose: bool = False,
+) -> List[Dict]:
+    """
+    Convert PDF pages to images using PyMuPDF (much faster than other methods).
+    
+    Args:
+        pdf_path (str): Path to the PDF file
+        pages (int, list, or str): Pages to convert (0-based indices)
+        dpi (int): DPI for the output images (default: 100)
+        include_base64 (bool): Whether to include base64 encoding of the images
+        max_workers (int): Maximum number of worker processes (default: CPU count)
+        progress_callback (callable): Function to call with progress updates
+        verbose (bool): Whether to print status messages
+        
+    Returns:
+        List[Dict]: List of dictionaries with image information
+    """
+    if not PYMUPDF_AVAILABLE:
+        if verbose:
+            print("PyMuPDF not available. Falling back to standard method.")
+        return pdf_to_image(
+            pdf_path=pdf_path,
+            pages=pages,
+            dpi=dpi,
+            include_base64=include_base64,
+            verbose=verbose,
+        )
+    
+    if verbose:
+        print(f"Converting PDF {pdf_path} using PyMuPDF (fast method)")
+    
+    # Determine number of workers based on CPU cores
+    if max_workers is None:
+        max_workers = min(multiprocessing.cpu_count(), 8)
+    
+    # Open PDF to get page count
+    pdf = fitz.open(pdf_path)
+    total_pages = len(pdf)
+    pdf.close()  # Close to avoid file locks during parallel processing
+    
+    if verbose:
+        print(f"PDF has {total_pages} pages")
+    
+    # Determine which pages to process
+    if pages == "all":
+        page_indices = list(range(total_pages))
+    elif isinstance(pages, int):
+        page_indices = [pages]
+    else:
+        page_indices = list(pages)
+    
+    # Limit pages if max_pages is specified
+    if len(page_indices) == 0:
+        return []
+    
+    results = []
+    total_to_process = len(page_indices)
+    
+    if verbose:
+        print(f"Processing {total_to_process} pages with {max_workers} workers")
+    
+    # Process pages in parallel
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        
+        # Submit all tasks
+        for i, page_idx in enumerate(page_indices):
+            futures.append(
+                executor.submit(
+                    _convert_page_fitz, 
+                    pdf_path, 
+                    page_idx, 
+                    dpi, 
+                    include_base64,
+                    verbose
+                )
+            )
+        
+        # Process results as they complete
+        for i, future in enumerate(futures):
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+                
+                # Report progress
+                if progress_callback:
+                    progress_callback(i + 1, total_to_process)
+                elif verbose and (i + 1) % 10 == 0:
+                    print(f"Processed {i + 1}/{total_to_process} pages")
+            except Exception as e:
+                if verbose:
+                    print(f"Error processing page: {e}")
+    
+    if verbose:
+        print(f"Successfully processed {len(results)}/{total_to_process} pages")
+    
+    # Sort results by page number
+    results.sort(key=lambda x: x["page"])
+    
+    return results
+
+
+def _convert_page_fitz(pdf_path, page_idx, dpi, include_base64, verbose=False):
+    """Convert a single page using PyMuPDF (much faster)"""
+    try:
+        start_time = time.time()
+        
+        # Calculate zoom factor based on DPI
+        zoom = dpi / 72  # 72 is the default PDF DPI
+        
+        # Open PDF and get page
+        pdf = fitz.open(pdf_path)
+        page = pdf[page_idx]
+        
+        # Get page dimensions
+        width, height = page.rect.width, page.rect.height
+        
+        # Create matrix for rendering
+        matrix = fitz.Matrix(zoom, zoom)
+        
+        # Render page to pixmap
+        pixmap = page.get_pixmap(matrix=matrix)
+        
+        # Convert to PIL Image for consistency with other methods
+        img = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
+        
+        result = {
+            "page": page_idx,
+            "width": pixmap.width,
+            "height": pixmap.height,
+            "format": "PNG",
+            "success": True,
+            "error": None
+        }
+        
+        # Add base64 if requested
+        if include_base64:
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format="PNG")
+            img_buffer.seek(0)
+            result["base64"] = base64.b64encode(img_buffer.read()).decode("utf-8")
+        
+        if verbose:
+            print(f"Converted page {page_idx} in {time.time() - start_time:.3f}s")
+        
+        # Close PDF to avoid memory leaks
+        pdf.close()
+        
+        return result
+    except Exception as e:
+        if verbose:
+            print(f"Error converting page {page_idx}: {e}")
+        return {
+            "page": page_idx,
+            "success": False,
+            "error": str(e)
+        }
 
 
 def pdf_to_image(

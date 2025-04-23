@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "video_url": "https://pub-f74b6e107f5a40f0947068a3ec3c4708.r2.dev/videos/ce83f2c8-e285-4d2b-9675-f37c1d4747c6.mp4",
+    "video_id": "ce83f2c8-e285-4d2b-9675-f37c1d4747c6.mp4",
+    "analysis_timestamp": "20250422_174949",
+    "analysis_modes": [
+      "visual"
+    ],
+    "frames_analyzed": 51,
+    "video_duration_seconds": 51,
+    "transcription_available": false,
+    "custom_message": "Analyze this video for In N Out brand compliance."
+  },
+  "results": {
+    "visual": "I am unable to complete the analysis at this time. There appears to be an issue in identifying logo frames. My initial searches for brand guidelines have been successful, but subsequent attempts to read specific pages or to analyze logo clarity have failed.\n\nI will follow the user's memories of the previous turns, and:\n\n1- Check if the logo is counterfeit\n2- Detect and flag any visual degradation, blurring, or manipulation of brand elements\n\nI need valid images to start the analysis again."
+  }
+}

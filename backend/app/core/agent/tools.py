@@ -293,6 +293,46 @@ claude_tools = [
         },
     },
     {
+        "name": "check_image_clarity",
+        "description": """
+            Analyze the clarity and sharpness of a specific region in an image.
+            This tool checks if elements like logos, text, or other brand assets are displayed with sufficient clarity.
+            It's particularly useful for checking if logos or text are blurred, pixelated, or otherwise unclear.
+        """,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "integer",
+                    "description": "For videos, the timestamp in seconds where to check clarity.",
+                },
+                "region_coordinates": {
+                    "type": "string",
+                    "description": "The coordinates of the region to analyze in format 'x1,y1,x2,y2'.",
+                },
+                "element_type": {
+                    "type": "string",
+                    "description": "The type of element being analyzed (e.g., 'logo', 'text', 'product').",
+                },
+                "min_clarity_score": {
+                    "type": "integer",
+                    "description": "Minimum acceptable clarity score (0-100).",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "The exact name of this tool that you are using",
+                    "enum": ["check_image_clarity"],
+                },
+                "task_detail": {
+                    "type": "string",
+                    "description": "A quick title about the task you are doing",
+                },
+            },
+            "required": ["region_coordinates", "element_type", "tool_name", "task_detail"],
+            "additionalProperties": True,
+        },
+    },
+    {
         "name": "check_layout_consistency",
         "description": """
             Analyze the layout consistency of an image against a grid system or template.
@@ -371,6 +411,7 @@ def get_tool_function(tool_name: str):
         "check_image_specs": check_image_specs,
         "check_element_placement": check_element_placement,
         "check_layout_consistency": check_layout_consistency,
+        "check_image_clarity": check_image_clarity,  # Added the new tool
     }
     return tool_map.get(tool_name)
 
@@ -720,7 +761,7 @@ async def read_guideline_page(data):
                     similarity = calculate_string_similarity(
                         brand_name, guideline.get("brand_name", "")
                     )
-                    if similarity >= 0.8 and similarity > best_similarity:
+                    if similarity >= 0.5 and similarity > best_similarity:
                         best_similarity = similarity
                         best_match = guideline
                         guideline["id"] = str(guideline["_id"])
@@ -1788,6 +1829,111 @@ async def check_layout_consistency(data):
     except Exception as e:
         return json.dumps({"error": f"Failed to analyze layout consistency: {str(e)}"})
 
+
+async def check_image_clarity(data):
+    """
+    Analyze the clarity and sharpness of a specific region in an image.
+    This tool checks if elements like logos, text, or other brand assets are displayed with sufficient clarity.
+    """
+    try:
+        # Extract parameters
+        region_coordinates = data.get("region_coordinates", "")
+        element_type = data.get("element_type", "unknown")
+        min_clarity_score = int(data.get("min_clarity_score", 80))  # Default to 80 if not provided
+        
+        # Get the image data
+        image_base64 = data.get("image_base64")
+        if not image_base64:
+            return json.dumps({
+                "error": "No image data provided"
+            })
+            
+        # Parse region coordinates
+        try:
+            # Handle different coordinate formats
+            if isinstance(region_coordinates, str):
+                # Format: "x1,y1,x2,y2"
+                coords = region_coordinates.split(",")
+                if len(coords) == 4:
+                    x1, y1, x2, y2 = map(int, coords)
+                else:
+                    return json.dumps({
+                        "error": f"Invalid region_coordinates format: {region_coordinates}. Expected 'x1,y1,x2,y2'"
+                    })
+            else:
+                # If coordinates are provided in a different format, handle accordingly
+                return json.dumps({
+                    "error": f"Unsupported region_coordinates format: {type(region_coordinates)}"
+                })
+        except Exception as coord_error:
+            return json.dumps({
+                "error": f"Error parsing region coordinates: {str(coord_error)}"
+            })
+            
+        # Ensure the image is properly padded for base64 decoding
+        padding_needed = len(image_base64) % 4
+        if padding_needed != 0:
+            image_base64 += "=" * (4 - padding_needed)
+            
+        # Decode the base64 image
+        try:
+            image_data = base64.b64decode(image_base64)
+            from PIL import Image, ImageFilter
+            import numpy as np
+            from io import BytesIO
+            
+            # Open the image
+            img = Image.open(BytesIO(image_data))
+            
+            # Crop to the region of interest
+            region = img.crop((x1, y1, x2, y2))
+            
+            # Calculate clarity metrics
+            # 1. Laplacian variance (higher variance = sharper image)
+            np_region = np.array(region.convert("L"))  # Convert to grayscale numpy array
+            laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+            conv = np.abs(np.convolve(np_region.flatten(), laplacian.flatten(), mode="same"))
+            laplacian_variance = np.var(conv)
+            
+            # 2. Calculate a clarity score (0-100)
+            # This is a simplified approach - in a real implementation, you'd use more sophisticated metrics
+            max_expected_variance = 500  # This is a tunable parameter based on expected image quality
+            clarity_score = min(100, int((laplacian_variance / max_expected_variance) * 100))
+            
+            # Determine if the clarity meets the minimum requirement
+            meets_requirement = clarity_score >= min_clarity_score
+            
+            # Prepare the result
+            result = {
+                "element_type": element_type,
+                "region": f"({x1},{y1}) to ({x2},{y2})",
+                "clarity_score": clarity_score,
+                "min_required": min_clarity_score,
+                "meets_requirement": meets_requirement,
+                "assessment": "Clear" if meets_requirement else "Blurry",
+                "recommendations": []
+            }
+            
+            # Add recommendations if clarity is insufficient
+            if not meets_requirement:
+                result["recommendations"].append("Increase the resolution of the image")
+                result["recommendations"].append(f"Ensure the {element_type} is not obscured or blurred")
+                if element_type == "logo":
+                    result["recommendations"].append("Use the vector version of the logo if available")
+                elif element_type == "text":
+                    result["recommendations"].append("Increase the font size or use a clearer font")
+            
+            return json.dumps(result)
+            
+        except Exception as img_error:
+            return json.dumps({
+                "error": f"Error processing image: {str(img_error)}"
+            })
+            
+    except Exception as e:
+        return json.dumps({
+            "error": f"Error in check_image_clarity: {str(e)}"
+        })
 
 async def attempt_completion(data):
     """Provide a final recommendation based on synthesized data."""
