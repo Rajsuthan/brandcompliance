@@ -204,6 +204,8 @@ export default function App() {
           newSteps.push(newStep);
         }
 
+        // 
+
         return {
           ...currentItem,
           steps: newSteps, // Use the updated steps array
