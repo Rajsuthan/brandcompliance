@@ -112,11 +112,13 @@ import inspect
 async def process_image_and_stream(
     image_base64: str, media_type: str, text: str, user_id: str
 ):
-    print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})")
+    import time
+    stream_func_start = time.time()
+    print(f"\033[94m[LOG] process_image_and_stream: Start at {stream_func_start:.3f} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})\033[0m")
     """
     Process an image using the compliance agent and stream the results.
 
@@ -175,15 +177,13 @@ async def process_image_and_stream(
     # Start the agent process in a background task
     print(f"[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})")
     try:
-        processing_task = asyncio.create_task(
-            agent.process(
-                user_prompt=text,
-                image_base64=image_base64,
-                media_type=media_type,
-            )
+        await agent.process(
+            user_prompt=text,
+            image_base64=image_base64,
+            media_type=media_type,
         )
     except Exception as e:
-        print(f"[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})")
+        print(f"[ERROR] process_image_and_stream: Exception when running agent.process: {e} (line {inspect.currentframe().f_lineno})")
         import traceback
         traceback.print_exc()
         raise
