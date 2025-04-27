@@ -329,14 +329,10 @@ async def process_image_and_stream(
                     print(f"[LOG] process_image_and_stream: Yielding keep-alive tool event: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                     yield event_data
                     last_yield_time = time.time()
-                if processing_task.done():
-                    print(f"[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})")
-                    # Do not send any "complete" event here; only yield "complete" when received from the agent
-                    break
+                # No processing_task to check anymore; just break if queue is empty and agent.process is done
+                break
     except asyncio.CancelledError:
         print(f"[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})")
-        if not processing_task.done():
-            processing_task.cancel()
         raise
     except Exception as e:
         print(f"[ERROR] process_image_and_stream: Exception in streaming loop: {e} (line {inspect.currentframe().f_lineno})")
@@ -344,9 +340,7 @@ async def process_image_and_stream(
         traceback.print_exc()
         raise
     finally:
-        if not processing_task.done():
-            processing_task.cancel()
-        print(f"[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})")
+        print(f"[LOG] process_image_and_stream: streaming loop finished (line {inspect.currentframe().f_lineno})")
 
 
 @router.post("/compliance/check-video")
@@ -626,8 +620,8 @@ async def process_video_and_stream(
                         event_data = f"data: tool:{json.dumps(keep_alive_event)}\n\n"
                         yield event_data
                         last_yield_time = time.time()
-                    # Check if the processing task is done
-                    if processing_task.done():
+                    # Check if the processing task is done, but guard against NameError
+                    if "processing_task" in locals() and processing_task.done():
                         break
 
         except asyncio.CancelledError:
