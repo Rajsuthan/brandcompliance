@@ -40,9 +40,11 @@ async def check_image_compliance(
     current_user: dict = Depends(get_current_user),
 ):
     import inspect
-    print(f"[LOG] check_image_compliance: Start (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] check_image_compliance: Received file: {file.filename}, content_type: {file.content_type} (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] check_image_compliance: User: {current_user.get('username', 'unknown')} (line {inspect.currentframe().f_lineno})")
+    import time
+    start_time = time.time()
+    print(f"\033[94m[LOG] check_image_compliance: Start at {start_time:.3f} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] check_image_compliance: Received file: {file.filename}, content_type: {file.content_type} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"\033[96m[LOG] check_image_compliance: User: {current_user.get('username', 'unknown')} (line {inspect.currentframe().f_lineno})\033[0m")
     """
     Upload an image and check it for brand compliance.
 
@@ -52,11 +54,10 @@ async def check_image_compliance(
     3. Streams the results back to the client
     """
     # Validate file type
-    import inspect
     content_type = file.content_type or ""
-    print(f"[LOG] check_image_compliance: Validating file type: {content_type} (line {inspect.currentframe().f_lineno})")
+    print(f"\033[93m[LOG] check_image_compliance: Validating file type: {content_type} (line {inspect.currentframe().f_lineno})\033[0m")
     if not content_type.startswith("image/"):
-        print(f"[LOG] check_image_compliance: Invalid file type (line {inspect.currentframe().f_lineno})")
+        print(f"\033[91m[LOG] check_image_compliance: Invalid file type (line {inspect.currentframe().f_lineno})\033[0m")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed",
@@ -66,20 +67,22 @@ async def check_image_compliance(
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=f".{content_type.split('/')[-1]}"
     ) as temp_file:
-        print(f"[LOG] check_image_compliance: Creating temp file at {temp_file.name} (line {inspect.currentframe().f_lineno})")
+        print(f"\033[92m[LOG] check_image_compliance: Creating temp file at {temp_file.name} (line {inspect.currentframe().f_lineno})\033[0m")
         # Write the uploaded file content to the temporary file
         shutil.copyfileobj(file.file, temp_file)
         temp_file_path = temp_file.name
 
     try:
-        print(f"[LOG] check_image_compliance: Encoding image to base64 (line {inspect.currentframe().f_lineno})")
+        print(f"\033[92m[LOG] check_image_compliance: Encoding image to base64 (line {inspect.currentframe().f_lineno})\033[0m")
         # Get the base64 encoding of the image
         image_base64, media_type = encode_image_to_base64(temp_file_path)
-        print(f"[LOG] check_image_compliance: Encoded image, media_type: {media_type} (line {inspect.currentframe().f_lineno})")
+        print(f"\033[92m[LOG] check_image_compliance: Encoded image, media_type: {media_type} (line {inspect.currentframe().f_lineno})\033[0m")
 
         # Create a streaming response
-        print(f"[LOG] check_image_compliance: Creating StreamingResponse (line {inspect.currentframe().f_lineno})")
-        return StreamingResponse(
+        print(f"\033[94m[LOG] check_image_compliance: Creating StreamingResponse (line {inspect.currentframe().f_lineno})\033[0m")
+        stream_start = time.time()
+        print(f"\033[94m[LOG] check_image_compliance: Streaming will start at {stream_start:.3f}\033[0m")
+        response = StreamingResponse(
             process_image_and_stream(
                 image_base64=image_base64,
                 media_type=media_type,
@@ -88,8 +91,11 @@ async def check_image_compliance(
             ),
             media_type="text/event-stream",
         )
+        stream_end = time.time()
+        print(f"\033[94m[LOG] check_image_compliance: StreamingResponse created at {stream_end:.3f}, elapsed: {stream_end - stream_start:.3f}s\033[0m")
+        return response
     except Exception as e:
-        print(f"[LOG] check_image_compliance: Exception occurred: {e} (line {inspect.currentframe().f_lineno})")
+        print(f"\033[91m[LOG] check_image_compliance: Exception occurred: {e} (line {inspect.currentframe().f_lineno})\033[0m")
         # Handle any errors
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -98,7 +104,7 @@ async def check_image_compliance(
     finally:
         # Clean up the temporary file
         if os.path.exists(temp_file_path):
-            print(f"[LOG] check_image_compliance: Deleting temp file {temp_file_path} (line {inspect.currentframe().f_lineno})")
+            print(f"\033[91m[LOG] check_image_compliance: Deleting temp file {temp_file_path} (line {inspect.currentframe().f_lineno})\033[0m")
             os.unlink(temp_file_path)
 
 
