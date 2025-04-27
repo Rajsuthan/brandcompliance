@@ -88,7 +88,7 @@ async def upload_brand_guideline(
     }
     guideline_id = create_brand_guideline(guideline_data)
 
-    from app.utils.pdf_to_image import pdf_to_image_fitz, PYMUPDF_AVAILABLE
+    from app.utils.pdf_to_image import pdf_to_image_fitz
     from app.utils.background_tasks import process_guideline_page
 
     async def event_stream():

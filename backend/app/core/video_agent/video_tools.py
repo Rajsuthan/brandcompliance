@@ -22,30 +22,9 @@ import requests
 # Load environment variables
 load_dotenv()
 
-# Import after adding backend_dir to sys.path
-from app.core.agent.tools import get_tool_function as get_image_tool_function
+# (Removed circular import of get_tool_function from app.core.agent.tools)
 
-
-def get_tool_function(tool_name: str):
-    """
-    Get the appropriate tool function for video analysis.
-    For video-specific tools, it returns the video tool function.
-    For common tools, it delegates to the image tool functions.
-    """
-    video_tool_map = {
-        "get_video_color_scheme": get_video_color_scheme,
-        "get_video_fonts": get_video_fonts,
-        "check_video_frame_specs": check_video_frame_specs,
-        "extract_verbal_content": extract_verbal_content,
-    }
-
-    # If it's a video-specific tool, return the video tool function
-    if tool_name in video_tool_map:
-        return video_tool_map.get(tool_name)
-
-    # For other tools (like get_region_color_scheme, check_color_contrast, etc.),
-    # delegate to the image tool functions since they can work with the frame base64
-    return get_image_tool_function(tool_name)
+# If you need to map tool names to functions, do it in app.core.agent.tools only.
 
 
 async def get_video_color_scheme(data):

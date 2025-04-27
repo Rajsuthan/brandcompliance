@@ -127,26 +127,23 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
           <button
             key={idx}
             onClick={() => setCurrentIndex(idx)}
-            className={`relative flex items-center h-8 px-3 rounded-full text-xs font-medium transition-all duration-200 ${
-              idx === currentIndex
-                ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/50"
-                : "bg-zinc-800 text-zinc-400 border border-zinc-700 hover:bg-zinc-700/50"
-            } ${
-              idx === currentProcessingIndex && item.isProcessing
+            className={`relative flex items-center h-8 px-3 rounded-full text-xs font-medium transition-all duration-200 ${idx === currentIndex
+              ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/50"
+              : "bg-zinc-800 text-zinc-400 border border-zinc-700 hover:bg-zinc-700/50"
+              } ${idx === currentProcessingIndex && item.isProcessing
                 ? "ring-2 ring-indigo-500/50 ring-offset-1 ring-offset-zinc-900"
                 : ""
-            }`}
+              }`}
           >
             <span
-              className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                item.isProcessing
-                  ? "bg-indigo-500 animate-pulse"
-                  : item.finalResult
+              className={`w-1.5 h-1.5 rounded-full mr-1.5 ${item.isProcessing
+                ? "bg-indigo-500 animate-pulse"
+                : item.finalResult
                   ? "bg-green-500"
                   : idx < currentProcessingIndex
-                  ? "bg-green-500" // Processed but no result (error?)
-                  : "bg-zinc-500" // Not processed yet
-              }`}
+                    ? "bg-green-500" // Processed but no result (error?)
+                    : "bg-zinc-500" // Not processed yet
+                }`}
             ></span>
             <span className="flex items-center">
               {/* Show processing order number */}
@@ -175,12 +172,11 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
       {/* Current file card - full width */}
       {items.length > 0 && (
         <div
-          className={`flex flex-col w-full animate-in fade-in slide-in-from-bottom-4 duration-500 ${
-            currentIndex === currentProcessingIndex &&
+          className={`flex flex-col w-full animate-in fade-in slide-in-from-bottom-4 duration-500 ${currentIndex === currentProcessingIndex &&
             items[currentIndex].isProcessing
-              ? "border-2 border-indigo-500/30 rounded-lg"
-              : ""
-          }`}
+            ? "border-2 border-indigo-500/30 rounded-lg"
+            : ""
+            }`}
         >
           {/* File header with details */}
           <div className="flex items-start p-4 border-b border-zinc-700 bg-zinc-800/70 rounded-t-lg">
@@ -262,15 +258,14 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
                           {/* Step indicator dot */}
                           <div className="absolute left-[-24px] top-0 z-10">
                             <div
-                              className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-300 bg-zinc-800 text-lg ${
-                                stepIndex === currentItem.steps.length - 1 &&
+                              className={`w-5 h-5 rounded-full flex items-center justify-center transition-all duration-300 bg-zinc-800 text-lg ${stepIndex === currentItem.steps.length - 1 &&
                                 !currentItem.isProcessing
-                                  ? "bg-green-700 text-white"
-                                  : ""
-                              }`}
+                                ? "bg-green-700 text-white"
+                                : ""
+                                }`}
                             >
                               {stepIndex === currentItem.steps.length - 1 &&
-                              currentItem.isProcessing ? (
+                                currentItem.isProcessing ? (
                                 <svg
                                   className="animate-spin h-2.5 w-2.5 text-white"
                                   xmlns="http://www.w3.org/2000/svg"
@@ -309,12 +304,45 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
                           </div>
 
                           {/* Content */}
-                          <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300">
-                            {step.type === "text"
-                              ? step.content
-                              : step.taskDetail
-                              ? `${step.taskDetail}...`
-                              : "Processing..."}
+                          <div className={
+                            (() => {
+                              if (step.type === "tool") {
+                                try {
+                                  const parsed = JSON.parse(step.content);
+                                  if (parsed.tool_name === "keep_alive") {
+                                    // Only show pulse for the most recent keep_alive step
+                                    const isLast = stepIndex === currentItem.steps.length - 1;
+                                    return `text-sm text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300 keep-alive-pulse ${isLast ? "" : ""}`;
+                                  }
+                                } catch { }
+                              }
+                              return "text-sm text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300";
+                            })()
+                          }>
+                            {(() => {
+                              if (step.type === "tool") {
+                                try {
+                                  const parsed = JSON.parse(step.content);
+                                  if (parsed.tool_name === "keep_alive") {
+                                    // Show a pulsing loader with the task_detail
+                                    return (
+                                      <span>
+                                        <span className="inline-block w-3 h-3 mr-2 rounded-full bg-indigo-400 opacity-60 animate-pulse"></span>
+                                        <span className="opacity-60">{parsed.task_detail || "Processing..."}</span>
+                                      </span>
+                                    );
+                                  }
+                                } catch { }
+                              }
+                              // Default rendering
+                              if (step.type === "text") {
+                                return step.content;
+                              } else if (step.taskDetail) {
+                                return `${step.taskDetail}...`;
+                              } else {
+                                return step.content;
+                              }
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -394,9 +422,8 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
                 {stepsCollapsed ? "Show Details" : "Hide Details"}
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className={`h-3.5 w-3.5 ml-1 transition-transform duration-200 ${
-                    stepsCollapsed ? "rotate-180" : ""
-                  }`}
+                  className={`h-3.5 w-3.5 ml-1 transition-transform duration-200 ${stepsCollapsed ? "rotate-180" : ""
+                    }`}
                   viewBox="0 0 20 20"
                   fill="currentColor"
                 >
@@ -502,6 +529,16 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
         return (
           <ReactMarkdown components={MarkdownComponents}>
             {parsed.result}
+          </ReactMarkdown>
+        );
+      }
+
+
+      // If it has a 'result' property as a string (single result)
+      if (parsed && parsed.recommendation && typeof parsed.recommendation === "string") {
+        return (
+          <ReactMarkdown components={MarkdownComponents}>
+            {parsed.recommendation}
           </ReactMarkdown>
         );
       }

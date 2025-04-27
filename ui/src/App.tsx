@@ -183,32 +183,52 @@ export default function App() {
         const taskDetail =
           event.type === "tool" ? extractTaskDetail(event.content) : undefined;
 
-        // Check if the last step exists and is of the same type to append content
-        if (lastStep && lastStep.type === event.type) {
-          // Append content to the last step
-          lastStep.content += event.content; // Assuming simple string concatenation is sufficient
-          if (taskDetail) lastStep.taskDetail = taskDetail; // Update taskDetail if applicable
-        } else {
-          // Add a new step if types don't match or it's the first step
-          // Ensure the type is compatible with ProcessingStep ('text' or 'tool')
+        if (event.type === "text") {
+          // Filter out XML tool call responses (full or partial)
+          const isXml =
+            typeof event.content === "string" &&
+            event.content.trim().startsWith("<") &&
+            event.content.trim().includes(">");
+
+          if (isXml) {
+            // Do not append XML tool call responses to the UI
+            return { ...currentItem, steps: newSteps };
+          }
+
+          // Group consecutive text events into one step, avoid duplicate appends
+          if (lastStep && lastStep.type === "text") {
+            // Only append if not already present at the end
+            if (!lastStep.content.endsWith(event.content)) {
+              lastStep.content += event.content;
+            }
+          } else {
+            const newStep: ProcessingStep = {
+              id: `${itemId}-${Date.now()}-${Math.random()
+                .toString(36)
+                .substring(2, 5)}`,
+              type: "text",
+              content: event.content,
+            };
+            newSteps.push(newStep);
+          }
+        } else if (event.type === "tool") {
+          // Always create a new step for tool events
           const newStep: ProcessingStep = {
             id: `${itemId}-${Date.now()}-${Math.random()
               .toString(36)
-              .substring(2, 5)}`, // More unique ID
-            type: event.type as "text" | "tool", // Explicitly cast to the expected type for ProcessingStep
+              .substring(2, 5)}`,
+            type: "tool",
             content: event.content,
           };
           if (taskDetail) {
-            newStep.taskDetail = taskDetail; // Add taskDetail if applicable (assuming ProcessingStep interface supports it)
+            newStep.taskDetail = taskDetail;
           }
           newSteps.push(newStep);
         }
 
-        // 
-
         return {
           ...currentItem,
-          steps: newSteps, // Use the updated steps array
+          steps: newSteps,
         };
       });
     } else if (event.type === "complete") {
@@ -271,7 +291,14 @@ export default function App() {
     try {
       const jsonData = JSON.parse(content);
       if (jsonData && typeof jsonData === "object") {
-        return jsonData.task_detail || jsonData.taskDetail || undefined;
+        // Check for task_detail/taskDetail at the top level
+        if (jsonData.task_detail || jsonData.taskDetail) {
+          return jsonData.task_detail || jsonData.taskDetail;
+        }
+        // Check for tool_input.task_detail/taskDetail
+        if (jsonData.tool_input && typeof jsonData.tool_input === "object") {
+          return jsonData.tool_input.task_detail || jsonData.tool_input.taskDetail || undefined;
+        }
       }
     } catch {
       // Removed empty catch block
@@ -398,11 +425,11 @@ export default function App() {
         {processingItems.some(
           (item) => !item.isProcessing && item.finalResult
         ) && (
-          <div className="mt-12 pt-6 border-t border-zinc-800">
-            {/* Pass authToken if required by the component */}
-            <FeedbackForm authToken={authToken} />
-          </div>
-        )}
+            <div className="mt-12 pt-6 border-t border-zinc-800">
+              {/* Pass authToken if required by the component */}
+              <FeedbackForm authToken={authToken} />
+            </div>
+          )}
       </main>
 
       {/* Processing Toast */}

@@ -14,13 +14,29 @@ from PIL import Image
 import io
 import time
 
-# Import PyMuPDF (fitz) - make sure to install with: pip install PyMuPDF
+# Import pypdfium2 (pure pip, no system dependencies)
+try:
+    import pypdfium2
+    PDFIUM_AVAILABLE = True
+except ImportError:
+    PDFIUM_AVAILABLE = False
+    print("Warning: pypdfium2 not available. PDF processing will be limited.")
+
+# Import PyMuPDF (fitz) as a fallback
 try:
     import fitz  # PyMuPDF
     PYMUPDF_AVAILABLE = True
 except ImportError:
     PYMUPDF_AVAILABLE = False
     print("Warning: PyMuPDF not available. Using fallback methods for PDF processing.")
+
+# Import pdf2image as a last-resort fallback
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    print("Warning: pdf2image not available. Falling back to other methods for PDF processing.")
 
 
 def get_pdf_page_count(pdf_path: str) -> int:
@@ -33,7 +49,20 @@ def get_pdf_page_count(pdf_path: str) -> int:
     Returns:
         int: Number of pages in the PDF
     """
-    # Try using PyMuPDF first (fastest method)
+    # Try pypdfium2 first (pure pip, no system dependencies)
+    if PDFIUM_AVAILABLE:
+        try:
+            start_time = time.time()
+            pdf = pypdfium2.PdfDocument(pdf_path)
+            page_count = len(pdf)
+            pdf.close()
+            print(f"pypdfium2: Got page count in {time.time() - start_time:.3f}s")
+            return page_count
+        except Exception as e:
+            print(f"pypdfium2 failed to get page count: {e}")
+            # Fall back to other methods
+
+    # Try PyMuPDF next
     if PYMUPDF_AVAILABLE:
         try:
             start_time = time.time()
@@ -44,38 +73,37 @@ def get_pdf_page_count(pdf_path: str) -> int:
             return page_count
         except Exception as e:
             print(f"PyMuPDF failed to get page count: {e}")
-            # Fall back to other methods
-            pass
-    
-    try:
-        # Try using pdfinfo to get page count
-        start_time = time.time()
-        result = subprocess.run(
-            ["pdfinfo", pdf_path],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
 
-        # Parse the output to find the page count
-        for line in result.stdout.split("\n"):
-            if line.startswith("Pages:"):
-                print(f"pdfinfo: Got page count in {time.time() - start_time:.3f}s")
-                return int(line.split(":")[1].strip())
-
-        raise ValueError("Could not find page count in pdfinfo output")
-
-    except (subprocess.SubprocessError, ValueError, FileNotFoundError):
-        # Try using PIL as fallback
+    # Try pdf2image as a last resort
+    if PDF2IMAGE_AVAILABLE:
         try:
             start_time = time.time()
-            with Image.open(pdf_path) as img:
-                if hasattr(img, "n_frames"):
-                    print(f"PIL: Got page count in {time.time() - start_time:.3f}s")
-                    return img.n_frames
-                return 1
-        except Exception:
-            return 0
+            images = convert_from_path(pdf_path, dpi=72, first_page=1, last_page=1)
+            if images:
+                page_count = 1
+                while True:
+                    try:
+                        temp = convert_from_path(pdf_path, dpi=72, first_page=page_count+1, last_page=page_count+1)
+                        if not temp:
+                            break
+                        page_count += 1
+                    except Exception:
+                        break
+                print(f"pdf2image: Got page count in {time.time() - start_time:.3f}s")
+                return page_count
+        except Exception as e:
+            print(f"pdf2image failed to get page count: {e}")
+
+    # Try PIL as a fallback
+    try:
+        start_time = time.time()
+        with Image.open(pdf_path) as img:
+            if hasattr(img, "n_frames"):
+                print(f"PIL: Got page count in {time.time() - start_time:.3f}s")
+                return img.n_frames
+            return 1
+    except Exception:
+        return 0
 
 
 def pdf_to_image_fitz(
@@ -88,7 +116,8 @@ def pdf_to_image_fitz(
     verbose: bool = False,
 ) -> List[Dict]:
     """
-    Convert PDF pages to images using PyMuPDF (much faster than other methods).
+    Convert PDF pages to images using pdf2image (Poppler-based PDF converter) while keeping function name compatibility.
+    Falls back to PyMuPDF or other methods if pdf2image is not available.
     
     Args:
         pdf_path (str): Path to the PDF file
@@ -102,72 +131,58 @@ def pdf_to_image_fitz(
     Returns:
         List[Dict]: List of dictionaries with image information
     """
-    if not PYMUPDF_AVAILABLE:
+    if PDF2IMAGE_AVAILABLE:
+        # Use pdf2image as the primary method
+        # Determine which pages to process
+        if pages == "all":
+            # For all pages, we need to get the page count first
+            total_pages = get_pdf_page_count(pdf_path)
+            page_indices = list(range(total_pages))
+        elif isinstance(pages, int):
+            page_indices = [pages]
+        else:
+            page_indices = list(pages)
+        
+        results = []
+        total_to_process = len(page_indices)
+        
         if verbose:
-            print("PyMuPDF not available. Falling back to standard method.")
-        return pdf_to_image(
-            pdf_path=pdf_path,
-            pages=pages,
-            dpi=dpi,
-            include_base64=include_base64,
-            verbose=verbose,
-        )
-    
-    if verbose:
-        print(f"Converting PDF {pdf_path} using PyMuPDF (fast method)")
-    
-    # Determine number of workers based on CPU cores
-    if max_workers is None:
-        max_workers = min(multiprocessing.cpu_count(), 8)
-    
-    # Open PDF to get page count
-    pdf = fitz.open(pdf_path)
-    total_pages = len(pdf)
-    pdf.close()  # Close to avoid file locks during parallel processing
-    
-    if verbose:
-        print(f"PDF has {total_pages} pages")
-    
-    # Determine which pages to process
-    if pages == "all":
-        page_indices = list(range(total_pages))
-    elif isinstance(pages, int):
-        page_indices = [pages]
-    else:
-        page_indices = list(pages)
-    
-    # Limit pages if max_pages is specified
-    if len(page_indices) == 0:
-        return []
-    
-    results = []
-    total_to_process = len(page_indices)
-    
-    if verbose:
-        print(f"Processing {total_to_process} pages with {max_workers} workers")
-    
-    # Process pages in parallel
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
+            print(f"Processing {total_to_process} pages with pdf2image")
         
-        # Submit all tasks
+        # Process each page
         for i, page_idx in enumerate(page_indices):
-            futures.append(
-                executor.submit(
-                    _convert_page_fitz, 
-                    pdf_path, 
-                    page_idx, 
-                    dpi, 
-                    include_base64,
-                    verbose
-                )
-            )
-        
-        # Process results as they complete
-        for i, future in enumerate(futures):
             try:
-                result = future.result()
-                if result:
+                # Convert using pdf2image (note: pdf2image uses 1-based indexing)
+                images = convert_from_path(
+                    pdf_path,
+                    dpi=dpi,
+                    first_page=page_idx+1,
+                    last_page=page_idx+1
+                )
+                
+                if images and len(images) > 0:
+                    # Save to a temporary buffer
+                    img_buffer = io.BytesIO()
+                    img_format = "PNG"
+                    images[0].save(img_buffer, format=img_format)
+                    img_buffer.seek(0)
+                    
+                    # Create result dictionary
+                    result = {
+                        "page": page_idx,
+                        "width": images[0].width,
+                        "height": images[0].height,
+                        "format": img_format,
+                        "success": True,
+                        "error": None,
+                        "image": images[0]  # Store the PIL image
+                    }
+                    
+                    # Add base64 encoding if requested
+                    if include_base64:
+                        base64_data = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+                        result["base64"] = f"data:image/{img_format.lower()};base64,{base64_data}"
+                    
                     results.append(result)
                 
                 # Report progress
@@ -177,72 +192,85 @@ def pdf_to_image_fitz(
                     print(f"Processed {i + 1}/{total_to_process} pages")
             except Exception as e:
                 if verbose:
-                    print(f"Error processing page: {e}")
-    
+                    print(f"Error processing page {page_idx} with pdf2image: {e}")
+        
+        if results:
+            # Sort results by page number
+            results.sort(key=lambda x: x["page"])
+            return results
+        elif verbose:
+            print("pdf2image processing failed. Falling back to standard method.")
+            
+    # If pdf2image failed or isn't available, fall back to the standard method
     if verbose:
-        print(f"Successfully processed {len(results)}/{total_to_process} pages")
-    
-    # Sort results by page number
-    results.sort(key=lambda x: x["page"])
-    
-    return results
+        print("Falling back to standard method.")
+        
+    return pdf_to_image(
+        pdf_path=pdf_path,
+        pages=pages,
+        dpi=dpi,
+        include_base64=include_base64,
+        verbose=verbose,
+    )
 
 
 def _convert_page_fitz(pdf_path, page_idx, dpi, include_base64, verbose=False):
-    """Convert a single page using PyMuPDF (much faster)"""
+    """Convert a single page using pdf2image (keeping original function name for compatibility)"""
     try:
-        start_time = time.time()
+        if verbose:
+            print(f"Converting page {page_idx} with pdf2image...")
+            
+        # Convert using pdf2image (note: pdf2image uses 1-based indexing)
+        images = convert_from_path(
+            pdf_path,
+            dpi=dpi,
+            first_page=page_idx+1,
+            last_page=page_idx+1
+        )
         
-        # Calculate zoom factor based on DPI
-        zoom = dpi / 72  # 72 is the default PDF DPI
+        if not images or len(images) == 0:
+            raise ValueError("No images returned from pdf2image")
+            
+        img = images[0]
+        width, height = img.width, img.height
         
-        # Open PDF and get page
-        pdf = fitz.open(pdf_path)
-        page = pdf[page_idx]
+        # Create a buffer for the image
+        img_buffer = io.BytesIO()
+        img_format = "PNG"
+        img.save(img_buffer, format=img_format)
+        img_buffer.seek(0)
         
-        # Get page dimensions
-        width, height = page.rect.width, page.rect.height
-        
-        # Create matrix for rendering
-        matrix = fitz.Matrix(zoom, zoom)
-        
-        # Render page to pixmap
-        pixmap = page.get_pixmap(matrix=matrix)
-        
-        # Convert to PIL Image for consistency with other methods
-        img = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
-        
-        result = {
+        img_data = {
             "page": page_idx,
-            "width": pixmap.width,
-            "height": pixmap.height,
-            "format": "PNG",
+            "width": width,
+            "height": height,
+            "format": img_format,
             "success": True,
-            "error": None
+            "error": None,
+            "image": img  # Include the PIL image object
         }
         
-        # Add base64 if requested
+        # Add base64 encoded image if requested
         if include_base64:
-            img_buffer = io.BytesIO()
-            img.save(img_buffer, format="PNG")
-            img_buffer.seek(0)
-            result["base64"] = base64.b64encode(img_buffer.read()).decode("utf-8")
+            base64_data = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+            img_data["base64"] = f"data:image/{img_format.lower()};base64,{base64_data}"
         
-        if verbose:
-            print(f"Converted page {page_idx} in {time.time() - start_time:.3f}s")
-        
-        # Close PDF to avoid memory leaks
-        pdf.close()
-        
-        return result
+        return img_data
+    
     except Exception as e:
         if verbose:
-            print(f"Error converting page {page_idx}: {e}")
-        return {
+            print(f"pdf2image failed: {e}")
+            
+        # Fallback methods would be here
+        error_data = {
             "page": page_idx,
+            "width": 0,
+            "height": 0,
+            "format": None,
             "success": False,
             "error": str(e)
         }
+        return error_data
 
 
 def pdf_to_image(
@@ -402,32 +430,89 @@ def pdf_to_image(
     return results
 
 
-def _convert_page(pdf_path, page_idx, output_path, dpi, verbose):
+def _convert_page(pdf_path, page_idx, output_path, dpi, verbose=False):
     """
     Convert a single PDF page to an image.
 
     Returns:
         tuple: (success, page_idx, output_path, error_message)
     """
+    success = False
+    error_message = ""
+
+    # Try pypdfium2 first (pure pip, no system dependencies)
+    if PDFIUM_AVAILABLE:
+        if verbose:
+            print(f"Trying pypdfium2 for page {page_idx}...")
+        try:
+            pdf = pypdfium2.PdfDocument(pdf_path)
+            page = pdf.get_page(page_idx)
+            pil_image = page.render(scale=dpi/72).to_pil()
+            pil_image.save(output_path)
+            page.close()
+            pdf.close()
+            if verbose:
+                print(f"pypdfium2 succeeded for page {page_idx}")
+            return True, page_idx, output_path, ""
+        except Exception as e:
+            error_message = f"pypdfium2 error: {str(e)}"
+            if verbose:
+                print(error_message)
+
+    # Try pdf2image next if available
+    if PDF2IMAGE_AVAILABLE:
+        if verbose:
+            print(f"Trying pdf2image for page {page_idx}...")
+        try:
+            images = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                first_page=page_idx+1,
+                last_page=page_idx+1
+            )
+            if images and len(images) > 0:
+                images[0].save(output_path)
+                if verbose:
+                    print(f"pdf2image succeeded for page {page_idx}")
+                return True, page_idx, output_path, ""
+            else:
+                error_message = "pdf2image returned no images"
+                if verbose:
+                    print(error_message)
+        except Exception as e:
+            error_message = f"pdf2image error: {str(e)}"
+            if verbose:
+                print(error_message)
+
+    # Try pdftoppm next (system dependency)
+    if verbose:
+        print(f"Trying pdftoppm for page {page_idx}...")
+
     try:
-        # Try using pdftoppm (from poppler-utils) if available
-        if _convert_with_pdftoppm(pdf_path, page_idx, output_path, dpi, verbose):
-            return (True, page_idx, output_path, None)
-
-        # If pdftoppm fails, try using PIL
-        if _convert_with_pil(pdf_path, page_idx, output_path, verbose):
-            return (True, page_idx, output_path, None)
-
-        # If both methods fail
-        return (
-            False,
-            page_idx,
-            output_path,
-            "Failed to convert PDF to image using all available methods",
-        )
-
+        success = _convert_with_pdftoppm(pdf_path, page_idx + 1, output_path, dpi, verbose)
+        if success:
+            return True, page_idx, output_path, ""
     except Exception as e:
-        return (False, page_idx, output_path, str(e))
+        error_message += f" | pdftoppm error: {str(e)}"
+        if verbose:
+            print(error_message)
+
+    # If pdftoppm fails, try PIL as fallback
+    if verbose:
+        print(f"Trying PIL for page {page_idx}...")
+
+    try:
+        success = _convert_with_pil(pdf_path, page_idx, output_path, verbose)
+        if success:
+            return True, page_idx, output_path, ""
+        else:
+            error_message += " | PIL conversion failed"
+    except Exception as e:
+        error_message += f" | PIL error: {str(e)}"
+        if verbose:
+            print(f"PIL failed: {str(e)}")
+
+    return False, page_idx, output_path, error_message
 
 
 def _convert_with_pdftoppm(

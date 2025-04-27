@@ -27,6 +27,9 @@ from app.core.agent.prompt import system_prompt, gemini_system_prompt
 from app.core.video_agent.video_agent_class import VideoAgent
 from app.db.database import create_feedback, get_user_feedback
 
+import re
+import xmltodict
+
 router = APIRouter()
 
 
@@ -135,7 +138,7 @@ async def process_image_and_stream(
     print(f"[LOG] process_image_and_stream: Retrieved {len(user_feedback_list) if user_feedback_list else 0} user feedback items (line {inspect.currentframe().f_lineno})")
 
     # Prepare custom system prompt with user feedback if available
-    custom_system_prompt = system_prompt
+    custom_system_prompt = gemini_system_prompt
     if user_feedback_list and len(user_feedback_list) > 0:
         print(f"[LOG] process_image_and_stream: Adding user feedback to system prompt (line {inspect.currentframe().f_lineno})")
         feedback_section = "\n\n<User Memories and Feedback> !IMPORTANT! \n This is feedback given by the user in previous compliance checks. You need to make sure to acknolwedge your knowledge of these feedback in your initial detailed plan and say that you will follow them \n"
@@ -148,33 +151,31 @@ async def process_image_and_stream(
             print(f"[LOG] process_image_and_stream: Feedback {i+1}: {feedback_content} (line {inspect.currentframe().f_lineno})")
 
         # Add feedback section to system prompt
-        custom_system_prompt = system_prompt + feedback_section
+        custom_system_prompt = gemini_system_prompt + feedback_section
         print(f"[LOG] process_image_and_stream: System prompt updated with user feedback (line {inspect.currentframe().f_lineno})")
     else:
         print(f"[LOG] process_image_and_stream: No user feedback found (line {inspect.currentframe().f_lineno})")
 
-    # Create an agent instance
-    print(f"[LOG] process_image_and_stream: Instantiating Agent with model claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
-    agent = Agent(
-        model="claude-3-5-sonnet-20241022",
+    # Create an OpenRouterAgent instance
+    print(f"[LOG] process_image_and_stream: Instantiating OpenRouterAgent (line {inspect.currentframe().f_lineno})")
+    from app.core.openrouter_agent.agent import OpenRouterAgent
+
+    agent = OpenRouterAgent(
+        model="google/gemini-2.5-pro-preview-03-25",
         on_stream=on_stream,
-        user_id=user_id,
-        message_id=message_id,
         system_prompt=custom_system_prompt,
     )
 
-    # Create a dictionary with image data and text
-    image_message = {
-        "image_base64": image_base64,
-        "media_type": media_type,
-        "text": text,
-    }
-    print(f"[LOG] process_image_and_stream: Created image_message dict (line {inspect.currentframe().f_lineno})")
-
-    # Process the message with image in a separate task
-    print(f"[LOG] process_image_and_stream: Creating processing_task (line {inspect.currentframe().f_lineno})")
+    # Start the agent process in a background task
+    print(f"[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})")
     try:
-        processing_task = asyncio.create_task(agent.process_message(image_message))
+        processing_task = asyncio.create_task(
+            agent.process(
+                user_prompt=text,
+                image_base64=image_base64,
+                media_type=media_type,
+            )
+        )
     except Exception as e:
         print(f"[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})")
         import traceback
@@ -183,75 +184,151 @@ async def process_image_and_stream(
 
     # Stream the results
     try:
-        # Buffer for tool content
         tool_buffer = ""
         tool_buffering = False
 
+        import time
+        last_yield_time = time.time()
         while True:
             try:
                 # Get data from the queue with a timeout
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
                 print(f"[LOG] process_image_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
 
-                # Filter out XML content from the data
-                if data["type"] == "text":
-                    # Check if the content contains XML tags
+                event_type = data.get("type")
+                if event_type == "text":
+                    # If we were buffering a tool, yield it now
+                    if tool_buffering and tool_buffer:
+                        try:
+                            parsed = json.loads(tool_buffer)
+                            event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                            print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                            yield event_data
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Tool buffer not valid JSON at flush: {e} (line {inspect.currentframe().f_lineno})")
+                        tool_buffer = ""
+                        tool_buffering = False
+
                     content = data["content"]
                     print(f"[LOG] process_image_and_stream: Handling text content: {content} (line {inspect.currentframe().f_lineno})")
                     if not (content.strip().startswith("<") and ">" in content):
-                        # Format as a server-sent event
-                        event_data = f"data: {data['type']}:{content}\n\n"
-                        print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
-                        yield event_data
-                elif data["type"] == "tool":
-                    # Buffer tool content until valid JSON
-                    tool_buffer += data["content"]
-                    tool_buffering = True
-                    print(f"[LOG] process_image_and_stream: Buffering tool content: {tool_buffer} (line {inspect.currentframe().f_lineno})")
+                        # Final check for any attempt_completion XML in the text before yielding
+                        ac_match_final = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
+                        if ac_match_final:
+                            xml_block = "<attempt_completion>" + ac_match_final.group(1) + "</attempt_completion>"
+                            try:
+                                xml_dict = xmltodict.parse(xml_block)
+                                ac = xml_dict.get("attempt_completion", {})
+                                tool_event = {
+                                    "tool_name": "attempt_completion",
+                                    "tool_input": {},
+                                    "task_detail": ac.get("task_detail") or "Final compliance result",
+                                    "result": ac.get("result") or ""
+                                }
+                                event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
+                                yield event_data
+                                event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
+                                yield event_data_complete
+                                break
+                            except Exception:
+                                event_data = f"data: text:{content}\n\n"
+                                print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                                yield event_data
+                                last_yield_time = time.time()
+                        else:
+                            event_data = f"data: text:{content}\n\n"
+                            print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                            yield event_data
+                            last_yield_time = time.time()
+                elif event_type == "tool":
+                    # If the content is already valid JSON, yield immediately
                     try:
-                        # Try to parse the buffer as JSON
-                        parsed = json.loads(tool_buffer)
-                        # If successful, yield and reset buffer
-                        event_data = f"data: tool:{json.dumps(parsed)}\n\n"
-                        print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                        json.loads(data["content"])
+                        event_data = f"data: tool:{data['content']}\n\n"
+                        print(f"[LOG] process_image_and_stream: Yielding tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                         yield event_data
+                        last_yield_time = time.time()
+                    except Exception:
+                        # If not valid JSON, buffer as before (for XML or partial)
+                        tool_buffer += data["content"]
+                        tool_buffering = True
+                        print(f"[LOG] process_image_and_stream: Buffering tool content: {tool_buffer} (line {inspect.currentframe().f_lineno})")
+                    # Do not try to parse or yield yet; wait for next non-tool event
+                elif event_type == "complete":
+                    # If we were buffering a tool, yield it now
+                    if tool_buffering and tool_buffer:
+                        try:
+                            parsed = json.loads(tool_buffer)
+                            event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                            print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                            yield event_data
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Tool buffer not valid JSON at flush: {e} (line {inspect.currentframe().f_lineno})")
                         tool_buffer = ""
                         tool_buffering = False
-                    except Exception as e:
-                        print(f"[LOG] process_image_and_stream: Tool buffer not yet valid JSON: {e} (line {inspect.currentframe().f_lineno})")
-                        # Not yet valid JSON, keep buffering
-                        pass
+
+                    # Only yield the final answer as the complete event, then break
+                    final_answer = data.get("content", "")
+                    event_data = f"data: complete:{final_answer}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding complete event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    yield event_data
+                    break
+                elif event_type in ("status", "error"):
+                    # If we were buffering a tool, yield it now
+                    if tool_buffering and tool_buffer:
+                        try:
+                            parsed = json.loads(tool_buffer)
+                            event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                            print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                            yield event_data
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Tool buffer not valid JSON at flush: {e} (line {inspect.currentframe().f_lineno})")
+                        tool_buffer = ""
+                        tool_buffering = False
+
+                    event_data = f"data: {event_type}:{data.get('content','')}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding {event_type} event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    yield event_data
+                    last_yield_time = time.time()
                 else:
-                    # Format as a server-sent event
-                    event_data = f"data: {data['type']}:{data['content']}\n\n"
+                    # If we were buffering a tool, yield it now
+                    if tool_buffering and tool_buffer:
+                        try:
+                            parsed = json.loads(tool_buffer)
+                            event_data = f"data: tool:{json.dumps(parsed)}\n\n"
+                            print(f"[LOG] process_image_and_stream: Yielding parsed tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                            yield event_data
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Tool buffer not valid JSON at flush: {e} (line {inspect.currentframe().f_lineno})")
+                        tool_buffer = ""
+                        tool_buffering = False
+
+                    event_data = f"data: {event_type}:{data.get('content','')}\n\n"
                     print(f"[LOG] process_image_and_stream: Yielding other event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                     yield event_data
+                    last_yield_time = time.time()
 
-                # Mark the item as processed
                 queue.task_done()
                 print(f"[LOG] process_image_and_stream: Marked queue item as done (line {inspect.currentframe().f_lineno})")
             except asyncio.TimeoutError:
                 print(f"[LOG] process_image_and_stream: Timeout waiting for queue item (line {inspect.currentframe().f_lineno})")
-                # Check if the processing task is done
+                # If more than 5 seconds have passed since last yield, send a user-friendly keep-alive tool event
+                if time.time() - last_yield_time > 15:
+                    keep_alive_event = {
+                        "tool_name": "keep_alive",
+                        "tool_input": {},
+                        "task_detail": "Still working on your image compliance analysis. This may take a few moments..."
+                    }
+                    event_data = f"data: tool:{json.dumps(keep_alive_event)}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding keep-alive tool event: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    yield event_data
+                    last_yield_time = time.time()
                 if processing_task.done():
                     print(f"[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})")
-                    # Get the final result
-                    try:
-                        final_response, messages = processing_task.result()
-                        print(f"[LOG] process_image_and_stream: Got final_response: {final_response} (line {inspect.currentframe().f_lineno})")
-                    except Exception as e:
-                        print(f"[ERROR] process_image_and_stream: Exception getting processing_task result: {e} (line {inspect.currentframe().f_lineno})")
-                        import traceback
-                        traceback.print_exc()
-                        raise
-
-                    # Send a completion event
-                    yield f"data: complete:{final_response}\n\n"
-                    print(f"[LOG] process_image_and_stream: Yielded completion event (line {inspect.currentframe().f_lineno})")
+                    # Do not send any "complete" event here; only yield "complete" when received from the agent
                     break
     except asyncio.CancelledError:
         print(f"[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})")
-        # Handle client disconnection
         if not processing_task.done():
             processing_task.cancel()
         raise
@@ -261,7 +338,6 @@ async def process_image_and_stream(
         traceback.print_exc()
         raise
     finally:
-        # Ensure the processing task is cancelled if not done
         if not processing_task.done():
             processing_task.cancel()
         print(f"[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})")
@@ -381,6 +457,8 @@ async def process_video_and_stream(
 
     # Define the streaming callback
     async def on_stream(data: Dict[str, Any]):
+        # in color
+        print(f"\033[92m[LOG] process_video_and_stream: Received streaming data: {data}\033[0m (line {inspect.currentframe().f_lineno})")
         await queue.put(data)
 
     # Get user feedback to include in the system prompt
@@ -415,19 +493,23 @@ async def process_video_and_stream(
     else:
         print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")
 
-    # Create a video agent instance
-    agent = VideoAgent(
-        model="gemini-2.0-flash",
+    # Create an OpenRouterAgent instance for video compliance
+    from app.core.openrouter_agent.agent import OpenRouterAgent
+
+    agent = OpenRouterAgent(
+        model="google/gemini-2.5-pro-preview-03-25",
         on_stream=on_stream,
-        user_id=user_id,
-        message_id=message_id,
         system_prompt=custom_system_prompt,
     )
 
-    # Process the video in a separate task
+    # Start the agent process in a background task
     try:
         processing_task = asyncio.create_task(
-            agent.generate(video_url, message, analysis_modes)
+            agent.process(
+                user_prompt=message,
+                video_url=video_url,
+                media_type="video/mp4",  # or infer from URL if needed
+            )
         )
 
         # Send initial status
@@ -435,56 +517,112 @@ async def process_video_and_stream(
 
         # Stream the results
         try:
+            import time
+            last_yield_time = time.time()
             while True:
                 try:
                     # Get data from the queue with a timeout
                     data = await asyncio.wait_for(queue.get(), timeout=1.0)
 
-                    # Filter out XML content from the data
-                    if data["type"] == "text":
-                        # Check if the content contains XML tags
+                    event_type = data.get("type")
+                    if event_type == "text":
                         content = data["content"]
-                        if not (content.strip().startswith("<") and ">" in content):
-                            # Format as a server-sent event
-                            event_data = f"data: {data['type']}:{content}\n\n"
-                            yield event_data
-                    else:
-                        # Format as a server-sent event
-                        event_data = f"data: {data['type']}:{data['content']}\n\n"
+                        import re
+                        import xmltodict
+                        ac_match = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
+                        if ac_match:
+                            xml_block = "<attempt_completion>" + ac_match.group(1) + "</attempt_completion>"
+                            try:
+                                xml_dict = xmltodict.parse(xml_block)
+                                ac = xml_dict.get("attempt_completion", {})
+                                tool_event = {
+                                    "tool_name": "attempt_completion",
+                                    "tool_input": {},
+                                    "task_detail": ac.get("task_detail") or "Final compliance result",
+                                    "result": ac.get("result") or ""
+                                }
+                                event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
+                                yield event_data
+                                event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
+                                yield event_data_complete
+                                queue.task_done()
+                                break
+                            except Exception:
+                                event_data = f"data: text:{content}\n\n"
+                                yield event_data
+                                last_yield_time = time.time()
+                        elif not (content.strip().startswith("<") and ">" in content):
+                            # Final check for any attempt_completion XML in the text before yielding
+                            ac_match_final = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
+                            if ac_match_final:
+                                xml_block = "<attempt_completion>" + ac_match_final.group(1) + "</attempt_completion>"
+                                try:
+                                    xml_dict = xmltodict.parse(xml_block)
+                                    ac = xml_dict.get("attempt_completion", {})
+                                    tool_event = {
+                                        "tool_name": "attempt_completion",
+                                        "tool_input": {},
+                                        "task_detail": ac.get("task_detail") or "Final compliance result",
+                                        "result": ac.get("result") or ""
+                                    }
+                                    event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
+                                    yield event_data
+                                    event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
+                                    yield event_data_complete
+                                    queue.task_done()
+                                    break
+                                except Exception:
+                                    event_data = f"data: {event_type}:{content}\n\n"
+                                    yield event_data
+                                    last_yield_time = time.time()
+                            else:
+                                event_data = f"data: {event_type}:{content}\n\n"
+                                yield event_data
+                                last_yield_time = time.time()
+                    elif event_type == "complete":
+                        complete_content = data.get('content', '')
+                        import re
+                        import xmltodict
+                        ac_match = re.search(r"<attempt_completion>(.*?)</attempt_completion>", complete_content, re.DOTALL)
+                        if ac_match:
+                            xml_block = "<attempt_completion>" + ac_match.group(1) + "</attempt_completion>"
+                            try:
+                                xml_dict = xmltodict.parse(xml_block)
+                                ac = xml_dict.get("attempt_completion", {})
+                                tool_event = {
+                                    "tool_name": "attempt_completion",
+                                    "tool_input": {},
+                                    "task_detail": ac.get("task_detail") or "Final compliance result",
+                                    "result": ac.get("result") or ""
+                                }
+                                event_data_tool = f"data: tool:{json.dumps(tool_event)}\n\n"
+                                yield event_data_tool
+                            except Exception:
+                                pass
+                        event_data = f"data: complete:{complete_content}\n\n"
                         yield event_data
+                        queue.task_done()
+                        break
+                    else:
+                        event_data = f"data: {event_type}:{data.get('content', '')}\n\n"
+                        yield event_data
+                        last_yield_time = time.time()
 
-                    # Mark the item as processed
                     queue.task_done()
                 except asyncio.TimeoutError:
+                    # If more than 5 seconds have passed since last yield, send a user-friendly keep-alive tool event
+                    if time.time() - last_yield_time > 15:
+                        keep_alive_event = {
+                            "tool_name": "keep_alive",
+                            "tool_input": {},
+                            "task_detail": "Still working on your video compliance analysis. This may take a few moments..."
+                        }
+                        event_data = f"data: tool:{json.dumps(keep_alive_event)}\n\n"
+                        yield event_data
+                        last_yield_time = time.time()
                     # Check if the processing task is done
                     if processing_task.done():
-                        try:
-                            # Get the final result
-                            results = processing_task.result()
-
-                            # Format the results as JSON
-                            final_response = json.dumps(
-                                {
-                                    "results": results["results"],
-                                    "filepath": results["filepath"],
-                                    "status": "success",
-                                }
-                            )
-
-                            # Send a completion event
-                            yield f"data: complete:{final_response}\n\n"
-                            break
-                        except Exception as e:
-                            # Handle any errors in processing task
-                            error_response = json.dumps(
-                                {
-                                    "status": "error",
-                                    "error": str(e),
-                                    "detail": "Failed to process video results",
-                                }
-                            )
-                            yield f"data: error:{error_response}\n\n"
-                            break
+                        break
 
         except asyncio.CancelledError:
             # Handle client disconnection

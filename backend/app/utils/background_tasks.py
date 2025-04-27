@@ -13,7 +13,7 @@ import random
 import multiprocessing
 from datetime import datetime
 from app.core.agent.llm import llm
-from app.utils.pdf_to_image import pdf_to_image_fitz, PYMUPDF_AVAILABLE
+from app.utils.pdf_to_image import pdf_to_image_fitz, pdf_to_image
 from app.db.database import create_guideline_page
 
 # Set up logging
@@ -219,87 +219,81 @@ async def process_pdf_batch(
     start_time = time.time()
     
     # Use PyMuPDF for faster processing if available
-    if PYMUPDF_AVAILABLE:
-        # Set max workers based on CPU cores and page count
-        if max_workers is None:
-            max_workers = min(multiprocessing.cpu_count(), 8)
-            
-        # For small PDFs, use fewer workers
-        if total_pages < max_workers:
-            max_workers = max(1, total_pages)
-            
-        logger.info(f"Using PyMuPDF with {max_workers} workers")
+    # Set max workers based on CPU cores and page count
+    if max_workers is None:
+        max_workers = min(multiprocessing.cpu_count(), 8)
         
-        # Process all pages in parallel
-        results = pdf_to_image_fitz(
-            pdf_path=pdf_path,
-            include_base64=include_base64,
-            dpi=dpi,
-            max_workers=max_workers,
-            verbose=True
-        )
+    # For small PDFs, use fewer workers
+    if total_pages < max_workers:
+        max_workers = max(1, total_pages)
         
-        # Store pages in batches to avoid memory issues
-        batch_size = 5  # Process 5 pages at a time
-        total_processed = 0
+    logger.info(f"Using pdf_to_image with {max_workers} workers")
         
-        for i in range(0, len(results), batch_size):
-            batch = results[i:i+batch_size]
+    # Process all pages in parallel
+    results = pdf_to_image(
+        pdf_path=pdf_path,
+        include_base64=include_base64,
+        dpi=dpi,
+        max_workers=max_workers,
+        verbose=True
+    )
+        
+    # Store pages in batches to avoid memory issues
+    batch_size = 5  # Process 5 pages at a time
+    total_processed = 0
+        
+    for i in range(0, len(results), batch_size):
+        batch = results[i:i+batch_size]
             
-            for result in batch:
-                if result["success"]:
-                    # Store page in database
-                    page_data = {
-                        "guideline_id": guideline_id,
-                        "page_number": result["page"] + 1,  # Convert to 1-based
-                        "width": result["width"],
-                        "height": result["height"],
-                        "base64": result.get("base64", None)
-                    }
+        for result in batch:
+            if result["success"]:
+                # Store page in database
+                page_data = {
+                    "guideline_id": guideline_id,
+                    "page_number": result["page"] + 1,  # Convert to 1-based
+                    "width": result["width"],
+                    "height": result["height"],
+                    "base64": result.get("base64", None)
+                }
                     
-                    # Create page in database
-                    page_id = create_guideline_page(page_data)
-                    total_processed += 1
+                # Create page in database
+                page_id = create_guideline_page(page_data)
+                total_processed += 1
 
-                    # Call LLM to process the page and generate tags/summary
-                    from app.db.database import update_guideline_page_with_results
-                    page_data_with_id = dict(page_data)
-                    page_data_with_id["id"] = page_id
-                    llm_result = await process_guideline_page(page_data_with_id)
-                    update_guideline_page_with_results(page_id, llm_result)
+                # Call LLM to process the page and generate tags/summary
+                from app.db.database import update_guideline_page_with_results
+                page_data_with_id = dict(page_data)
+                page_data_with_id["id"] = page_id
+                llm_result = await process_guideline_page(page_data_with_id)
+                update_guideline_page_with_results(page_id, llm_result)
                     
-            # Log progress
-            progress = (i + len(batch)) / len(results) * 100
-            logger.info(f"Processed {i + len(batch)}/{len(results)} pages ({progress:.1f}%)")
+        # Log progress
+        progress = (i + len(batch)) / len(results) * 100
+        logger.info(f"Processed {i + len(batch)}/{len(results)} pages ({progress:.1f}%)")
             
-        elapsed = time.time() - start_time
-        pages_per_second = total_processed / elapsed
-        logger.info(
-            f"Completed batch processing: {total_processed}/{total_pages} pages in {elapsed:.2f}s "
-            f"({pages_per_second:.2f} pages/sec)"
-        )
+    elapsed = time.time() - start_time
+    pages_per_second = total_processed / elapsed
+    logger.info(
+        f"Completed batch processing: {total_processed}/{total_pages} pages in {elapsed:.2f}s "
+        f"({pages_per_second:.2f} pages/sec)"
+    )
         
-        # Clean up the temporary PDF file after processing
-        try:
-            import os
-            if os.path.exists(pdf_path):
-                os.unlink(pdf_path)
-                logger.info(f"Deleted temporary PDF file: {pdf_path}")
-        except Exception as cleanup_err:
-            logger.error(f"Failed to delete temporary PDF file {pdf_path}: {cleanup_err}")
+    # Clean up the temporary PDF file after processing
+    try:
+        import os
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+            logger.info(f"Deleted temporary PDF file: {pdf_path}")
+    except Exception as cleanup_err:
+        logger.error(f"Failed to delete temporary PDF file {pdf_path}: {cleanup_err}")
 
-        return {
-            "success": True,
-            "total_pages": total_pages,
-            "processed_pages": total_processed,
-            "elapsed_time": elapsed,
-            "pages_per_second": pages_per_second
-        }
-    else:
-        logger.warning("PyMuPDF not available. Using slower processing method.")
-        # Fall back to individual page processing
-        # This is much slower but ensures compatibility
-        return {"success": False, "error": "PyMuPDF not available"}
+    return {
+        "success": True,
+        "total_pages": total_pages,
+        "processed_pages": total_processed,
+        "elapsed_time": elapsed,
+        "pages_per_second": pages_per_second
+    }
 
 
 def create_page_processing_task(
@@ -327,11 +321,8 @@ def create_page_processing_task(
     # Generate a task ID
     task_id = f"pdf_task_{guideline_id}_{int(time.time())}"
 
-    print(pdf_path)
-    print(PYMUPDF_AVAILABLE)
-
-    # If PDF path is provided, use batch processing
-    if pdf_path and PYMUPDF_AVAILABLE:
+    # If PDF path is provided, use batch processing regardless of PyMuPDF
+    if pdf_path:
         logger.info(f"Creating batch processing task for PDF with {total_pages} pages")
         asyncio.create_task(
             run_background_task(
@@ -346,9 +337,8 @@ def create_page_processing_task(
             )
         )
     else:
-        # PyMuPDF not available, cannot process PDF
-        logger.error("PyMuPDF is not available. Batch PDF processing is required for brand guideline uploads.")
-        raise RuntimeError("PDF processing requires PyMuPDF. Please install PyMuPDF to enable this feature.")
+        logger.error("PDF path not provided. Cannot start background PDF processing task.")
+        raise RuntimeError("PDF path is required to process brand guidelines.")
 
     logger.info(f"Created background task {task_id} for guideline {guideline_id}")
     return task_id

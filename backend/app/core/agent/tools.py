@@ -1,6 +1,164 @@
 # input schema of tools passing to claude
 
 claude_tools = [
+    # --- VIDEO TOOLS ---
+    {
+        "name": "get_video_color_scheme",
+        "description": "Get the color scheme of the video frame(s) at the specified timestamp.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "integer",
+                    "description": "The timestamp (in seconds) of the video frame to analyze.",
+                },
+                "images_base64": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of base64-encoded video frames (optional, for multi-frame analysis).",
+                },
+                "image_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded image of the video frame (for single frame analysis).",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "The exact name of this tool that you are using",
+                    "enum": ["get_video_color_scheme"],
+                },
+                "task_detail": {
+                    "type": "string",
+                    "description": "A quick title about the task you are doing",
+                },
+            },
+            "required": ["timestamp", "tool_name", "task_detail"],
+            "additionalProperties": True,
+        },
+    },
+    {
+        "name": "get_video_fonts",
+        "description": "Identify fonts used in the video frame(s) at the specified timestamp.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "integer",
+                    "description": "The timestamp (in seconds) of the video frame to analyze.",
+                },
+                "images_base64": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of base64-encoded video frames (optional, for multi-frame analysis).",
+                },
+                "image_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded image of the video frame (for single frame analysis).",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "The exact name of this tool that you are using",
+                    "enum": ["get_video_fonts"],
+                },
+                "task_detail": {
+                    "type": "string",
+                    "description": "A quick title about the task you are doing",
+                },
+            },
+            "required": ["timestamp", "tool_name", "task_detail"],
+            "additionalProperties": True,
+        },
+    },
+    {
+        "name": "check_video_frame_specs",
+        "description": "Analyze the video frame specifications at the specified timestamp for compliance with brand guidelines.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "integer",
+                    "description": "The timestamp (in seconds) of the video frame to analyze.",
+                },
+                "required_width": {
+                    "type": "integer",
+                    "description": "Required width in pixels (0 for no requirement)",
+                    "minimum": 0,
+                },
+                "required_height": {
+                    "type": "integer",
+                    "description": "Required height in pixels (0 for no requirement)",
+                    "minimum": 0,
+                },
+                "min_resolution": {
+                    "type": "integer",
+                    "description": "Minimum resolution in DPI (0 for no requirement)",
+                    "minimum": 0,
+                },
+                "aspect_ratio": {
+                    "type": "string",
+                    "description": "Required aspect ratio (e.g., '16:9', '4:3', '1:1', or 'any')",
+                },
+                "images_base64": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of base64-encoded video frames (optional, for multi-frame analysis).",
+                },
+                "image_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded image of the video frame (for single frame analysis).",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "The exact name of this tool that you are using",
+                    "enum": ["check_video_frame_specs"],
+                },
+                "task_detail": {
+                    "type": "string",
+                    "description": "A quick title about the task you are doing",
+                },
+            },
+            "required": ["timestamp", "tool_name", "task_detail"],
+            "additionalProperties": True,
+        },
+    },
+    {
+        "name": "extract_verbal_content",
+        "description": "Extract all verbal content from video (both spoken and displayed text) using OCR.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timestamps": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "List of timestamps (in seconds) to analyze for text.",
+                },
+                "all_frames": {
+                    "type": "object",
+                    "description": "Dictionary of all frames by timestamp (optional).",
+                },
+                "images_base64": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of base64-encoded video frames (optional, for multi-frame analysis).",
+                },
+                "image_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded image of the video frame (for single frame analysis).",
+                },
+                "tool_name": {
+                    "type": "string",
+                    "description": "The exact name of this tool that you are using",
+                    "enum": ["extract_verbal_content"],
+                },
+                "task_detail": {
+                    "type": "string",
+                    "description": "A quick title about the task you are doing",
+                },
+            },
+            "required": ["tool_name", "task_detail"],
+            "additionalProperties": True,
+        },
+    },
+    # --- END VIDEO TOOLS ---
     {
         "name": "search_brand_guidelines",
         "description": "Search for and retrieve the brand guidelines for a specific brand.",
@@ -397,26 +555,46 @@ claude_tools = [
 
 import json
 
+# --- VIDEO TOOL IMPORTS ---
+from app.core.video_agent.video_tools import (
+    get_video_color_scheme,
+    get_video_fonts,
+    check_video_frame_specs,
+    extract_verbal_content,
+)
 
 def get_tool_function(tool_name: str):
     tool_map = {
+        "check_text_grammar": check_text_grammar,
         "search_brand_guidelines": get_brand_guidelines,
         "read_guideline_page": read_guideline_page,
-        "attempt_completion": attempt_completion,  # This points to the async function below
+        "attempt_completion": attempt_completion,
         "get_image_color_scheme": get_image_color_scheme,
         "get_image_fonts": get_image_fonts,
-        #
+        "get_video_color_scheme": get_video_color_scheme,
+        "get_video_fonts": get_video_fonts,
+        "check_video_frame_specs": check_video_frame_specs,
+        "extract_verbal_content": extract_verbal_content,
         "get_region_color_scheme": get_region_color_scheme,
         "check_color_contrast": check_color_contrast,
         "check_image_specs": check_image_specs,
         "check_element_placement": check_element_placement,
         "check_layout_consistency": check_layout_consistency,
-        "check_image_clarity": check_image_clarity,  # Added the new tool
+        "check_image_clarity": check_image_clarity,
     }
     return tool_map.get(tool_name)
 
 
 # Tool functions are defined below
+
+async def check_text_grammar(data):
+    """
+    Stub for check_text_grammar tool.
+    """
+    return {
+        "result": "Grammar check not implemented yet. This is a stub response.",
+        "input": data
+    }
 
 
 from io import BytesIO
@@ -478,35 +656,26 @@ async def get_image_color_scheme(data):
 
 async def get_brand_guidelines(data):
     """Search for and retrieve the brand guidelines for a specific brand."""
-    print("get_brand_guidelines received data:", data)
     brand_name = data.get("brand_name")
-    print("brand_name:", brand_name)
     if not brand_name:
         return json.dumps({"error": "No brand name provided."})
 
     query = data.get("query")
-    print("query:", query)
-    print("🔍 Getting brand guidelines ->", data)
 
     try:
-        print("Importing necessary modules")
         # Import necessary modules
         from app.db.database import brand_guidelines_collection, get_guideline_pages
         from bson.objectid import ObjectId
         import re
 
-        print("Trying an exact match")
         # First try an exact match
         exact_match = brand_guidelines_collection.find_one({"brand_name": brand_name})
 
         if exact_match:
-            print("Found an exact match")
             # Found an exact match
             best_match = exact_match
-            print("Formatting best_match")
             best_match["id"] = str(best_match["_id"])
         else:
-            print("Trying a case-insensitive regex match")
             # Try a case-insensitive regex match
             regex_pattern = f"^{re.escape(brand_name)}$"
             regex_match = brand_guidelines_collection.find_one(
@@ -514,19 +683,12 @@ async def get_brand_guidelines(data):
             )
 
             if regex_match:
-                print("Found a case-insensitive match")
                 # Found a case-insensitive match
                 best_match = regex_match
-                print("Formatting best_match")
                 best_match["id"] = str(best_match["_id"])
             else:
-                print(
-                    "Trying a fuzzy match by getting all guidelines and calculating similarity"
-                )
-
                 # Try a fuzzy match by getting all guidelines and calculating similarity
                 def calculate_string_similarity(str1, str2):
-                    print("Calculating similarity between:", str1, "and", str2)
                     """Calculate similarity between two strings (0-1)"""
                     str1 = str1.lower()
                     str2 = str2.lower()
@@ -560,7 +722,6 @@ async def get_brand_guidelines(data):
 
                     return 1.0 - (distance / max_length)
 
-                print("Getting all guidelines")
                 # Get all guidelines
                 all_guidelines = list(brand_guidelines_collection.find({}))
 
@@ -569,20 +730,16 @@ async def get_brand_guidelines(data):
                 best_similarity = 0
 
                 for guideline in all_guidelines:
-                    print("Calculating similarity for guideline:", guideline)
                     similarity = calculate_string_similarity(
                         brand_name, guideline.get("brand_name", "")
                     )
-                    print("Similarity:", similarity)
                     if similarity >= 0.8 and similarity > best_similarity:
                         best_similarity = similarity
                         best_match = guideline
-                        print("Best match:", best_match)
                         best_match["id"] = str(best_match["_id"])
 
         # If no match found with at least 80% similarity
         if not best_match:
-            print("No match found with at least 80% similarity")
             return json.dumps(
                 {
                     "error": f"Brand guidelines for '{brand_name}' not found.",
@@ -594,13 +751,11 @@ async def get_brand_guidelines(data):
                 }
             )
 
-        print("Getting all pages for this guideline")
         # Get all pages for this guideline
         pages = get_guideline_pages(best_match["id"], include_base64=False)
 
         # If query parameter is provided, filter pages by content
         if query:
-            print("Filtering pages by query:", query)
             filtered_pages = []
             for page in pages:
                 # Check if processing_results contains the query
@@ -616,10 +771,8 @@ async def get_brand_guidelines(data):
 
             # If we found matching pages, use them instead
             if filtered_pages:
-                print("Using filtered pages")
                 pages = filtered_pages
 
-        print("Formatting response")
         # Format the response
         response = {
             "brand_name": best_match.get("brand_name"),
@@ -646,11 +799,9 @@ async def get_brand_guidelines(data):
             ),
         }
 
-        print("Returning response")
         return json.dumps(response)
 
     except Exception as e:
-        print(f"❌ Error in get_brand_guidelines: {str(e)}")
         return json.dumps(
             {
                 "error": f"Error retrieving brand guidelines: {str(e)}",
@@ -671,7 +822,7 @@ async def read_guideline_page(data):
     if not page_number:
         return json.dumps({"error": "No page number provided."})
 
-    print("📖 Reading guideline page ->", data)
+    # print("📖 Reading guideline page ->", data)
 
     try:
         # Import necessary modules
@@ -821,10 +972,14 @@ async def get_region_color_scheme(data):
     """Get the color scheme of a specific region within the image."""
 
     image_base64 = data.get("image_base64")
-    x1 = data.get("x1", 0)
-    y1 = data.get("y1", 0)
-    x2 = data.get("x2", 0)
-    y2 = data.get("y2", 0)
+    # Ensure coordinates are integers
+    try:
+        x1 = int(data.get("x1", 0))
+        y1 = int(data.get("y1", 0))
+        x2 = int(data.get("x2", 0))
+        y2 = int(data.get("y2", 0))
+    except Exception as e:
+        return json.dumps({"error": f"Invalid coordinate type: {str(e)}"})
 
     # Check if the base64 string exists
     if not image_base64:
@@ -1940,8 +2095,6 @@ async def attempt_completion(data):
     result = data.get("result")
     if not result:
         return "Error: No result provided for completion."
-
-    print("🏁 Attempting completion ->", data)
 
     # Simulate a final recommendation
     recommendation = {

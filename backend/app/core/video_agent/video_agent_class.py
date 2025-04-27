@@ -24,7 +24,7 @@ from app.core.video_agent.llm import download_video
 # from google.genai import types # Removed google.genai types
 from openai import OpenAI  # Added OpenAI client
 import xmltodict
-from app.core.video_agent.video_tools import get_tool_function
+from app.core.agent.tools import get_tool_function
 import re
 import numpy as np
 import base64

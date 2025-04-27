@@ -8,9 +8,7 @@ import re
 from datetime import datetime
 import json
 import json as main_json
-from app.core.video_agent.video_tools import (
-    get_tool_function,
-)
+from app.core.agent.tools import get_tool_function
 import xmltodict
 from app.core.agent.prompt import gemini_system_prompt
 import numpy as np
