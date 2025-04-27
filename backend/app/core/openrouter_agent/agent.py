@@ -202,7 +202,7 @@ class OpenRouterAgent:
             import time
             process_start_time = time.time()
             print(f"\033[94m[LOG] OpenRouterAgent.process: Started at {process_start_time:.3f}\033[0m")
-            print(f"\033[94m[LOG] OpenRouterAgent.process: API KEY check: {OPENROUTER_API_KEY[:5]}...{OPENROUTER_API_KEY[-5:] if OPENROUTER_API_KEY else 'None'}\033[0m")
+            print(f"\033[94m[LOG] OpenRouterAgent.process: API KEY check: {OPENROUTER_API_KEY}\033[0m")
             print(f"\033[94m[LOG] OpenRouterAgent.process: API URL: {OPENROUTER_API_URL}\033[0m")
             user_content = []
         except Exception as e:
