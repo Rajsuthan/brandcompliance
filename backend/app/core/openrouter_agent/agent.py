@@ -68,12 +68,21 @@ class OpenRouterAgent:
     async def stream_llm_response(self, session, payload):
         try:
             print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Preparing headers and payload\033[0m")
+            # Make sure API key format and authorization header format are exactly correct
             headers = {
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",  # Add strip() to remove any whitespace
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://brandcompliance.onrender.com",  # Add this to help with API security policies
-                "X-Title": "Brand Compliance Tool"  # Add this to identify your application
+                "X-Title": "Brand Compliance Tool",  # Add this to identify your application
+                "User-Agent": "BrandCompliance/1.0.0"  # Add User-Agent which helps some APIs
             }
+            
+            # Print first 5 chars of API key for validation
+            if OPENROUTER_API_KEY:
+                key_start = OPENROUTER_API_KEY[:5]
+                print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: API KEY starts with: {key_start}...\033[0m")
+            else:
+                print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: NO API KEY FOUND!\033[0m")
             # Print payload size for debugging
             payload_size = len(json.dumps(payload))
             print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Payload size: {payload_size} bytes\033[0m")
