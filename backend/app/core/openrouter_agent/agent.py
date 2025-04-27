@@ -5,6 +5,9 @@ import aiohttp
 import asyncio
 import re
 import xmltodict
+import inspect
+import time
+import traceback
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 # Import tool schemas and functions from the existing tools.py
@@ -13,6 +16,10 @@ from app.core.agent.tools import claude_tools, get_tool_function
 OPENROUTER_API_KEY = "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"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Constants for timeout settings
+OPENROUTER_TIMEOUT = 120  # 2 minutes timeout for OpenRouter API calls
+STREAMING_TIMEOUT = 180  # 3 minutes timeout for the entire streaming operation
+
 class OpenRouterAgent:
     def __init__(
         self,
@@ -20,12 +27,15 @@ class OpenRouterAgent:
         available_tools: Optional[List[Dict]] = None,
         on_stream: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         system_prompt: Optional[str] = None,
+        timeout: int = OPENROUTER_TIMEOUT,
     ):
         self.model = model
         self.available_tools = available_tools or claude_tools
         self.messages: List[Dict[str, Any]] = []
         self.on_stream = on_stream
         self.system_prompt = system_prompt  # No override, let LLM use default tool call protocol
+        self.timeout = timeout
+        print(f"\033[94m[LOG] OpenRouterAgent.__init__: Initialized with model {model} and timeout {timeout}s\033[0m")
 
     async def add_message(self, role: str, content: Any):
         self.messages.append({"role": role, "content": content})
@@ -184,60 +194,82 @@ class OpenRouterAgent:
                 # Stream the assistant's response
                 full_content = ""
                 tool_calls = None
-                async with session.post(OPENROUTER_API_URL, headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                }, json=payload) as resp:
-                    # Buffer all text content for this LLM response
-                    full_content = ""
-                    stream_start_time = time.time()
-                    print(f"\033[94m[LOG] OpenRouterAgent.process: Streaming started at {stream_start_time:.3f}\033[0m")
-                    first_chunk_time = None
-                    chunk_count = 0
-                    async for line in resp.content:
-                        if line.startswith(b"data: "):
-                            data = line[6:].decode("utf-8").strip()
-                            if data == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data)
-                            except Exception:
-                                continue
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            if "content" in delta:
-                                chunk_content = delta["content"]
-                                if chunk_content is not None:
-                                    if first_chunk_time is None:
-                                        first_chunk_time = time.time()
-                                        print(f"\033[92m[LOG] First stream chunk received at {first_chunk_time:.3f} ({first_chunk_time - stream_start_time:.3f}s after stream start)\033[0m")
-                                    full_content += chunk_content
-                                    chunk_count += 1
-                                    print(f"\033[96m[STREAM CHUNK {chunk_count}] {chunk_content}\033[0m")
-                    stream_end_time = time.time()
-                    print(f"\033[91m[LOG] OpenRouterAgent.process: Streaming ended at {stream_end_time:.3f}\033[0m")
-                    print(f"\033[93m[LOG] OpenRouterAgent.process: Total streaming time: {stream_end_time - stream_start_time:.3f} seconds\033[0m")
-                    if first_chunk_time:
-                        print(f"\033[93m[LOG] Time to first stream chunk: {first_chunk_time - stream_start_time:.3f} seconds\033[0m")
-                        print(f"\033[93m[LOG] Time from first chunk to end: {stream_end_time - first_chunk_time:.3f} seconds\033[0m")
-                    print(f"\033[95m[LOG] OpenRouterAgent.process: Full content received: {full_content[:200]}{'...[[TRUNCATED]]' if len(full_content) > 200 else ''}\033[0m")
-                    # After streaming is done, extract XML tool call(s) and stream both text and tool
-                    if self.on_stream and full_content:
-                        # Find all XML tool call blocks
-                        xml_blocks = list(re.finditer(r"<xml>[\s\S]*?</xml>", full_content))
-                        tool_events = []
-                        attempt_completion_event = None
-                        for xml_match in xml_blocks:
-                            xml_content = xml_match.group(0)
-                            tool_tag, tool_input = self.extract_xml_tool_call(xml_content)
-                            if tool_tag and tool_input:
-                                tool_event_json = json.dumps({
-                                    "tool_name": tool_tag,
-                                    "tool_input": tool_input
-                                })
-                                if tool_tag == "attempt_completion":
-                                    attempt_completion_event = tool_event_json
-                                else:
-                                    tool_events.append(tool_event_json)
+                try:
+                    print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Starting API call to {OPENROUTER_API_URL} at {time.time():.3f}\033[0m")
+                    async with session.post(
+                        OPENROUTER_API_URL, 
+                        headers={
+                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                            "Content-Type": "application/json",
+                        }, 
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout)
+                    ) as resp:
+                        # Buffer all text content for this LLM response
+                        full_content = ""
+                        stream_start_time = time.time()
+                        print(f"\033[94m[LOG] OpenRouterAgent.process: Streaming started at {stream_start_time:.3f}\033[0m")
+                        first_chunk_time = None
+                        chunk_count = 0
+                        async for line in resp.content:
+                            if line.startswith(b"data: "):
+                                data = line[6:].decode("utf-8").strip()
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                except Exception:
+                                    continue
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                if "content" in delta:
+                                    chunk_content = delta["content"]
+                                    if chunk_content is not None:
+                                        if first_chunk_time is None:
+                                            first_chunk_time = time.time()
+                                            print(f"\033[92m[LOG] First stream chunk received at {first_chunk_time:.3f} ({first_chunk_time - stream_start_time:.3f}s after stream start)\033[0m")
+                                        full_content += chunk_content
+                                        chunk_count += 1
+                                        print(f"\033[96m[STREAM CHUNK {chunk_count}] {chunk_content}\033[0m")
+                        stream_end_time = time.time()
+                        print(f"\033[91m[LOG] OpenRouterAgent.process: Streaming ended at {stream_end_time:.3f}\033[0m")
+                        print(f"\033[93m[LOG] OpenRouterAgent.process: Total streaming time: {stream_end_time - stream_start_time:.3f} seconds\033[0m")
+                        if first_chunk_time:
+                            print(f"\033[93m[LOG] Time to first stream chunk: {first_chunk_time - stream_start_time:.3f} seconds\033[0m")
+                            print(f"\033[93m[LOG] Time from first chunk to end: {stream_end_time - first_chunk_time:.3f} seconds\033[0m")
+                        print(f"\033[95m[LOG] OpenRouterAgent.process: Full content received: {full_content[:200]}{'...[[TRUNCATED]]' if len(full_content) > 200 else ''}\033[0m")
+                # This is a duplicate block that was erroneously added during editing - removing it
+                except asyncio.TimeoutError:
+                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Timeout after {self.timeout}s waiting for OpenRouter API response\033[0m")
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": "Timeout error while processing. The request took too long to complete."})
+                        await self.on_stream({"type": "complete", "content": "Processing timed out."})
+                    raise
+                except Exception as e:
+                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Exception during API call: {str(e)}\033[0m")
+                    traceback.print_exc()
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": f"Error while processing: {str(e)}"})
+                        await self.on_stream({"type": "complete", "content": "Processing failed with an error."})
+                    raise
+                
+                # After streaming is done, extract XML tool call(s) and stream both text and tool
+                if self.on_stream and full_content:
+                    # Find all XML tool call blocks
+                    xml_blocks = list(re.finditer(r"<xml>[\s\S]*?</xml>", full_content))
+                    tool_events = []
+                    attempt_completion_event = None
+                    for xml_match in xml_blocks:
+                        xml_content = xml_match.group(0)
+                        tool_tag, tool_input = self.extract_xml_tool_call(xml_content)
+                        if tool_tag and tool_input:
+                            tool_event_json = json.dumps({
+                                "tool_name": tool_tag,
+                                "tool_input": tool_input
+                            })
+                            if tool_tag == "attempt_completion":
+                                attempt_completion_event = tool_event_json
+                            else:
+                                tool_events.append(tool_event_json)
                         # Remove all XML blocks from text
                         cleaned_text = re.sub(r"<xml>[\s\S]*?</xml>", "", full_content).strip()
                         if cleaned_text:

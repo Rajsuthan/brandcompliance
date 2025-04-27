@@ -114,6 +114,7 @@ async def process_image_and_stream(
 ):
     import time
     stream_func_start = time.time()
+    print(f"\033[91m[LOG] process_image_and_stream: >>> ENTERED GENERATOR at {stream_func_start:.3f} (line {inspect.currentframe().f_lineno}) <<<\033[0m")
     print(f"\033[94m[LOG] process_image_and_stream: Start at {stream_func_start:.3f} (line {inspect.currentframe().f_lineno})\033[0m")
     print(f"\033[96m[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})\033[0m")
     print(f"\033[96m[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})\033[0m")
@@ -177,13 +178,16 @@ async def process_image_and_stream(
     # Start the agent process in a background task
     print(f"[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})")
     try:
-        await agent.process(
-            user_prompt=text,
-            image_base64=image_base64,
-            media_type=media_type,
+        processing_task = asyncio.create_task(
+            agent.process(
+                user_prompt=text,
+                image_base64=image_base64,
+                media_type=media_type,
+            )
         )
+        print(f"\033[92m[LOG] process_image_and_stream: Created processing_task at {time.time():.3f}\033[0m")
     except Exception as e:
-        print(f"[ERROR] process_image_and_stream: Exception when running agent.process: {e} (line {inspect.currentframe().f_lineno})")
+        print(f"\033[91m[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})\033[0m")
         import traceback
         traceback.print_exc()
         raise
@@ -329,10 +333,19 @@ async def process_image_and_stream(
                     print(f"[LOG] process_image_and_stream: Yielding keep-alive tool event: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                     yield event_data
                     last_yield_time = time.time()
-                # No processing_task to check anymore; just break if queue is empty and agent.process is done
-                break
+                # Check if the processing task is done
+                if processing_task.done():
+                    print(f"\033[93m[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})\033[0m")
+                    # If the task resulted in an exception, log it
+                    if processing_task.exception():
+                        print(f"\033[91m[ERROR] process_image_and_stream: processing_task failed with exception: {processing_task.exception()} (line {inspect.currentframe().f_lineno})\033[0m")
+                    # Do not send any "complete" event here; only yield "complete" when received from the agent
+                    break
     except asyncio.CancelledError:
-        print(f"[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})")
+        print(f"\033[91m[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})\033[0m")
+        if not processing_task.done():
+            processing_task.cancel()
+            print(f"\033[91m[LOG] process_image_and_stream: processing_task cancelled due to CancelledError (line {inspect.currentframe().f_lineno})\033[0m")
         raise
     except Exception as e:
         print(f"[ERROR] process_image_and_stream: Exception in streaming loop: {e} (line {inspect.currentframe().f_lineno})")
@@ -340,7 +353,10 @@ async def process_image_and_stream(
         traceback.print_exc()
         raise
     finally:
-        print(f"[LOG] process_image_and_stream: streaming loop finished (line {inspect.currentframe().f_lineno})")
+        if 'processing_task' in locals() and not processing_task.done():
+            processing_task.cancel()
+            print(f"\033[91m[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})\033[0m")
+        print(f"\033[93m[LOG] process_image_and_stream: streaming loop finished (line {inspect.currentframe().f_lineno})\033[0m")
 
 
 @router.post("/compliance/check-video")
