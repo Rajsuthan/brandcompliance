@@ -118,10 +118,16 @@ class OpenRouterAgent:
                         await self.on_stream({"type": "complete", "content": "Analysis failed due to stream error."})
                     raise
                 if not data_received:
+                    # Try to read the full response body for debugging
+                    try:
+                        resp_text = await resp.text()
+                        error_message = f"Error: No streaming data received from OpenRouter API. Response body: {resp_text[:500]}"
+                    except Exception as e:
+                        error_message = f"Error: No streaming data received from OpenRouter API. Could not read response body: {e}"
                     if self.on_stream:
-                        await self.on_stream({"type": "text", "content": "Error: No data received from OpenRouter API. The service may be down or rate-limited."})
+                        await self.on_stream({"type": "text", "content": error_message})
                         await self.on_stream({"type": "complete", "content": "Analysis failed due to no data from AI service."})
-                    raise Exception("No data received from OpenRouter API")
+                    raise Exception(error_message)
         except Exception as e:
             if self.on_stream:
                 await self.on_stream({"type": "text", "content": f"OpenRouter API request failed: {str(e)}"})
