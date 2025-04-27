@@ -20,8 +20,25 @@ import os
 HAS_ENV_KEY = "OPENROUTER_API_KEY" in os.environ
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "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")
 
-# Print diagnostics about the key during import
+# Print diagnostics about the key during import - add more detailed info
 print(f"\033[94m[INIT] OpenRouterAgent: Using {'environment' if HAS_ENV_KEY else 'fallback'} API key\033[0m")
+print(f"\033[94m[INIT] OpenRouterAgent: API key starts with: {OPENROUTER_API_KEY[:10]}...\033[0m")
+
+# Add function to verify API key format
+def verify_openrouter_key(key):
+    """Verify that key looks like a valid OpenRouter API key"""
+    if not key or not isinstance(key, str):
+        return False
+    # OpenRouter keys typically start with 'sk-or-'
+    if not key.startswith("sk-or-"):
+        print(f"\033[91m[WARN] OpenRouter API key format appears invalid (should start with 'sk-or-')\033[0m")
+        return False
+    return True
+
+# Check key format during import
+is_key_valid_format = verify_openrouter_key(OPENROUTER_API_KEY)
+if not is_key_valid_format:
+    print(f"\033[91m[CRITICAL] OpenRouterAgent: API key format appears invalid!\033[0m")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Constants for timeout settings
@@ -92,9 +109,27 @@ class OpenRouterAgent:
                     response_text = await resp.text()
                     error_message = f"OpenRouter API returned status code {resp.status}: {response_text}"
                     print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: {error_message}\033[0m")
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": f"API Error: {error_message}"})
-                        await self.on_stream({"type": "complete", "content": "Analysis failed due to API error."})
+                    
+                    # Special handling for authentication errors
+                    if resp.status == 401:
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: AUTHENTICATION ERROR - API KEY NOT VALID\033[0m")
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: Using environment key: {HAS_ENV_KEY}\033[0m")
+                        # Print the first few chars of the key for debugging without revealing the whole key
+                        key_preview = OPENROUTER_API_KEY[:8] + '...' if OPENROUTER_API_KEY else 'None'
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: API key starts with: {key_preview}\033[0m")
+                        
+                        auth_error_msg = "Authentication failed: The API key for OpenRouter is invalid or missing. "
+                        auth_error_msg += "Please check the OPENROUTER_API_KEY environment variable on the server."
+                        
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": auth_error_msg})
+                            await self.on_stream({"type": "complete", "content": "Analysis failed due to authentication error."})
+                    else:
+                        # For other types of errors
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": f"API Error: {error_message}"})
+                            await self.on_stream({"type": "complete", "content": "Analysis failed due to API error."})
+                    
                     raise Exception(error_message)
                 
                 try:
