@@ -40,5 +40,35 @@ async def test_streaming_image_compliance():
         media_type=media_type,
     )
 
+# async def test_streaming_asset_image_compliance():
+#     # Use the real asset image from backend/app/assets/
+#     image_path = os.path.join("backend", "app", "assets", "Screenshot 2025-03-29 at 10.57.02 AM.png")
+#     with open(image_path, "rb") as f:
+#         image_base64 = base64.b64encode(f.read()).decode("utf-8")
+#     media_type = "image/png"
+#     prompt = "Analyze this image for brand compliance. Please use the tool call protocol and return your tool call in <xml>...</xml> format."
+
+#     print("Starting streaming test for asset image compliance...\n")
+
+#     # Define the streaming callback
+#     async def on_stream(data):
+#         event_type = data.get("type")
+#         if event_type in ("text", "tool", "complete"):
+#             print(f"{event_type}: {data.get('content', '')}")
+#         else:
+#             print(f"{event_type}: {data}")
+
+#     agent = OpenRouterAgent(
+#         model="anthropic/claude-3-sonnet-20240229",
+#         on_stream=on_stream,
+#         system_prompt=gemini_system_prompt,
+#     )
+
+#     await agent.process(
+#         user_prompt=prompt,
+#         image_base64=image_base64,
+#         media_type=media_type,
+#     )
+
 if __name__ == "__main__":
     asyncio.run(test_streaming_image_compliance())

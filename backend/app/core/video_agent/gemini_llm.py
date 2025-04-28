@@ -90,7 +90,7 @@ async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=
         if last_timestamp < 0 or (timestamp - last_timestamp) >= fixed_interval:
             is_unique = True
             if prev_frame is not None:
-                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.5)
+                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.8)
                 if is_similar:
                     is_unique = False
             if is_unique:

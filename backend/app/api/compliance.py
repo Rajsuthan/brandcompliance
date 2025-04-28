@@ -112,14 +112,11 @@ import inspect
 async def process_image_and_stream(
     image_base64: str, media_type: str, text: str, user_id: str
 ):
-    import time
-    stream_func_start = time.time()
-    print(f"\033[91m[LOG] process_image_and_stream: >>> ENTERED GENERATOR at {stream_func_start:.3f} (line {inspect.currentframe().f_lineno}) <<<\033[0m")
-    print(f"\033[94m[LOG] process_image_and_stream: Start at {stream_func_start:.3f} (line {inspect.currentframe().f_lineno})\033[0m")
-    print(f"\033[96m[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})\033[0m")
-    print(f"\033[96m[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})\033[0m")
-    print(f"\033[96m[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})\033[0m")
-    print(f"\033[96m[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})")
     """
     Process an image using the compliance agent and stream the results.
 
@@ -166,48 +163,29 @@ async def process_image_and_stream(
         print(f"[LOG] process_image_and_stream: No user feedback found (line {inspect.currentframe().f_lineno})")
 
     # Create an OpenRouterAgent instance
-    print(f"\033[93m[LOG] process_image_and_stream: Instantiating OpenRouterAgent (line {inspect.currentframe().f_lineno})\033[0m")
-    try:
-        from app.core.openrouter_agent.agent import OpenRouterAgent
-        print(f"\033[92m[LOG] process_image_and_stream: Successfully imported OpenRouterAgent (line {inspect.currentframe().f_lineno})\033[0m")
-    except Exception as e:
-        print(f"\033[91m[ERROR] process_image_and_stream: Failed to import OpenRouterAgent: {e} (line {inspect.currentframe().f_lineno})\033[0m")
-        raise
+    print(f"[LOG] process_image_and_stream: Instantiating OpenRouterAgent (line {inspect.currentframe().f_lineno})")
+    from app.core.openrouter_agent.agent import OpenRouterAgent
 
     agent = OpenRouterAgent(
-        model="google/gemini-2.5-pro-preview-03-25",
+        model="meta-llama/llama-4-maverick",
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
     )
 
     # Start the agent process in a background task
-    print(f"\033[93m[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})\033[0m")
+    print(f"[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})")
     try:
-        # Set a shorter timeout for production environment
-        timeout_seconds = 60  # 1 minute timeout
-        process_future = agent.process(
-            user_prompt=text,
-            image_base64=image_base64,
-            media_type=media_type,
-        )
-        
-        # Add an explicit timeout
         processing_task = asyncio.create_task(
-            asyncio.wait_for(process_future, timeout=timeout_seconds)
+            agent.process(
+                user_prompt=text,
+                image_base64=image_base64,
+                media_type=media_type,
+            )
         )
-        
-        # Send an immediate response to verify the streaming is working
-        yield "data: status:Starting image analysis. This might take a minute...\n\n"
-        yield "data: text:Analyzing your image for brand compliance...\n\n"
-        print(f"\033[92m[LOG] process_image_and_stream: Created processing_task at {time.time():.3f} with timeout {timeout_seconds}s\033[0m")
-        
     except Exception as e:
-        print(f"\033[91m[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})\033[0m")
+        print(f"[ERROR] process_image_and_stream: Exception when creating processing_task: {e} (line {inspect.currentframe().f_lineno})")
         import traceback
         traceback.print_exc()
-        # Even if there's an error, provide a friendly response back to the client
-        yield "data: text:There was an error starting the analysis. Please try again later.\n\n"
-        yield "data: complete:Analysis could not be completed.\n\n"
         raise
 
     # Stream the results
@@ -217,24 +195,13 @@ async def process_image_and_stream(
 
         import time
         last_yield_time = time.time()
-        start_time = time.time()
-        max_wait_time = 45  # Increased maximum wait time for first real response
-        has_received_real_response = False  # Flag to track if we've received any non-keep-alive responses
-        
-        print(f"\033[93m[LOG] process_image_and_stream: Starting streaming loop at {start_time:.3f}\033[0m")
-        
         while True:
             try:
                 # Get data from the queue with a timeout
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
-                print(f"\033[92m[LOG] process_image_and_stream: Received queue data: {data}\033[0m")
                 print(f"[LOG] process_image_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
 
                 event_type = data.get("type")
-                # Mark that we've received a real response (not just a keep-alive)
-                if event_type in ["text", "tool", "complete"] and data.get("content"):
-                    has_received_real_response = True
-                    print(f"\033[92m[LOG] process_image_and_stream: Received real response of type {event_type} (line {inspect.currentframe().f_lineno})\033[0m")
                 if event_type == "text":
                     # If we were buffering a tool, yield it now
                     if tool_buffering and tool_buffer:
@@ -362,33 +329,14 @@ async def process_image_and_stream(
                     print(f"[LOG] process_image_and_stream: Yielding keep-alive tool event: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
                     yield event_data
                     last_yield_time = time.time()
-                # Add a fallback for production environments
-                elapsed_time = time.time() - start_time
-                
-                # Check if we've been waiting too long for a real response
-                if not has_received_real_response and elapsed_time > max_wait_time:
-                    print(f"\033[91m[ERROR] process_image_and_stream: No real response received after {elapsed_time:.1f}s, sending fallback response (line {inspect.currentframe().f_lineno})\033[0m")
-                    fallback_message = "data: text:Sorry, our analysis service is currently experiencing delays. Please try again in a few minutes.\n\n"
-                    yield fallback_message
-                    yield "data: complete:Analysis timed out.\n\n"
-                    break
-                
-                # Check if the processing task is done
                 if processing_task.done():
-                    print(f"\033[93m[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})\033[0m")
-                    # If the task resulted in an exception, log it
-                    if processing_task.exception():
-                        print(f"\033[91m[ERROR] process_image_and_stream: processing_task failed with exception: {processing_task.exception()} (line {inspect.currentframe().f_lineno})\033[0m")
-                        # Send a friendly error message to the client
-                        yield "data: text:Sorry, we encountered an error while analyzing your image. Please try again.\n\n"
-                        yield "data: complete:Analysis failed.\n\n"
-                    # Do not send any "complete" event here if one wasn't already sent
+                    print(f"[LOG] process_image_and_stream: processing_task is done (line {inspect.currentframe().f_lineno})")
+                    # Do not send any "complete" event here; only yield "complete" when received from the agent
                     break
     except asyncio.CancelledError:
-        print(f"\033[91m[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})\033[0m")
+        print(f"[LOG] process_image_and_stream: asyncio.CancelledError (line {inspect.currentframe().f_lineno})")
         if not processing_task.done():
             processing_task.cancel()
-            print(f"\033[91m[LOG] process_image_and_stream: processing_task cancelled due to CancelledError (line {inspect.currentframe().f_lineno})\033[0m")
         raise
     except Exception as e:
         print(f"[ERROR] process_image_and_stream: Exception in streaming loop: {e} (line {inspect.currentframe().f_lineno})")
@@ -396,10 +344,9 @@ async def process_image_and_stream(
         traceback.print_exc()
         raise
     finally:
-        if 'processing_task' in locals() and not processing_task.done():
+        if not processing_task.done():
             processing_task.cancel()
-            print(f"\033[91m[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})\033[0m")
-        print(f"\033[93m[LOG] process_image_and_stream: streaming loop finished (line {inspect.currentframe().f_lineno})\033[0m")
+        print(f"[LOG] process_image_and_stream: processing_task cancelled in finally (line {inspect.currentframe().f_lineno})")
 
 
 @router.post("/compliance/check-video")
@@ -556,7 +503,7 @@ async def process_video_and_stream(
     from app.core.openrouter_agent.agent import OpenRouterAgent
 
     agent = OpenRouterAgent(
-        model="google/gemini-2.5-pro-preview-03-25",
+        model="meta-llama/llama-4-maverick",
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
     )
@@ -584,11 +531,6 @@ async def process_video_and_stream(
                     data = await asyncio.wait_for(queue.get(), timeout=1.0)
 
                     event_type = data.get("type")
-                    # Mark that we've received a real response (not just a keep-alive)
-                    if event_type in ["text", "tool", "complete"] and data.get("content"):
-                        has_received_real_response = True
-                        print(f"\033[92m[LOG] process_image_and_stream: Received real response of type {event_type} (line {inspect.currentframe().f_lineno})\033[0m")
-                
                     if event_type == "text":
                         content = data["content"]
                         import re
@@ -684,8 +626,8 @@ async def process_video_and_stream(
                         event_data = f"data: tool:{json.dumps(keep_alive_event)}\n\n"
                         yield event_data
                         last_yield_time = time.time()
-                    # Check if the processing task is done, but guard against NameError
-                    if "processing_task" in locals() and processing_task.done():
+                    # Check if the processing task is done
+                    if processing_task.done():
                         break
 
         except asyncio.CancelledError:

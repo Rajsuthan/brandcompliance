@@ -126,16 +126,16 @@ export default function App() {
           await checkVideoCompliance(
             item.file,
             false,
-            `Analyze this video for ${item.brandName} brand compliance.`,
+            `Analyze this video for ${item.brandName} brand compliance using the provided tools and guidelines. Start by searching for brand guidelines and continue with the analysis. Make sure to do deep research and you must use the provided tools to execute this process.`,
             authToken,
             (event) => handleItemComplianceEvent(item.id, event),
-            ["visual"],
+            ["visual", "brand_voice", "tone"],
             item.brandName
           );
         } else {
           await checkImageCompliance(
             item.file,
-            `Analyze this image for ${item.brandName} brand compliance.`,
+            `Analyze this image for ${item.brandName} brand compliance using the provided tools and guidelines. Start by searching for brand guidelines and continue with the analysis. Make sure to do deep research and you must use the provided tools to execute this process.`,
             authToken,
             (event) => handleItemComplianceEvent(item.id, event)
           );

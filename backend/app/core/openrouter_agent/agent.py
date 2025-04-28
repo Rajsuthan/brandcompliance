@@ -8,37 +8,15 @@ import xmltodict
 import inspect
 import time
 import traceback
+import datetime
+import uuid
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 # Import tool schemas and functions from the existing tools.py
 from app.core.agent.tools import claude_tools, get_tool_function
 
-import os
-
-# Get API key from environment variable or use fallback
-# Check if key is available in environment
-HAS_ENV_KEY = "OPENROUTER_API_KEY" in os.environ
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
-# Print diagnostics about the key during import - add more detailed info
-print(f"\033[94m[INIT] OpenRouterAgent: Using {'environment' if HAS_ENV_KEY else 'fallback'} API key\033[0m")
-print(f"\033[94m[INIT] OpenRouterAgent: API key starts with: {OPENROUTER_API_KEY[:10]}...\033[0m")
-
-# Add function to verify API key format
-def verify_openrouter_key(key):
-    """Verify that key looks like a valid OpenRouter API key"""
-    if not key or not isinstance(key, str):
-        return False
-    # OpenRouter keys typically start with 'sk-or-'
-    if not key.startswith("sk-or-"):
-        print(f"\033[91m[WARN] OpenRouter API key format appears invalid (should start with 'sk-or-')\033[0m")
-        return False
-    return True
-
-# Check key format during import
-is_key_valid_format = verify_openrouter_key(OPENROUTER_API_KEY)
-if not is_key_valid_format:
-    print(f"\033[91m[CRITICAL] OpenRouterAgent: API key format appears invalid!\033[0m")
+OPENROUTER_API_KEY = "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"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Constants for timeout settings
@@ -53,6 +31,7 @@ class OpenRouterAgent:
         on_stream: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         system_prompt: Optional[str] = None,
         timeout: int = OPENROUTER_TIMEOUT,
+        save_messages: bool = True,
     ):
         self.model = model
         self.available_tools = available_tools or claude_tools
@@ -60,170 +39,108 @@ class OpenRouterAgent:
         self.on_stream = on_stream
         self.system_prompt = system_prompt  # No override, let LLM use default tool call protocol
         self.timeout = timeout
+        self.save_messages = save_messages
+        self.conversation_id = str(uuid.uuid4())
+        
+        # Create logs directory if it doesn't exist
+        self.logs_dir = Path("logs/conversations")
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.messages_file = self.logs_dir / f"{self.conversation_id}.json"
+        
         print(f"\033[94m[LOG] OpenRouterAgent.__init__: Initialized with model {model} and timeout {timeout}s\033[0m")
+        if self.save_messages:
+            print(f"\033[94m[LOG] OpenRouterAgent.__init__: Messages will be saved to {self.messages_file}\033[0m")
 
+    async def save_messages_to_file(self):
+        """Save current messages to a JSON file in real-time."""
+        if not self.save_messages:
+            return
+            
+        try:
+            timestamp = datetime.datetime.now().isoformat()
+            data = {
+                "conversation_id": self.conversation_id,
+                "model": self.model,
+                "timestamp": timestamp,
+                "messages": self.messages
+            }
+            
+            with open(self.messages_file, 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+                
+            print(f"\033[92m[LOG] Saved messages to {self.messages_file}\033[0m")
+        except Exception as e:
+            print(f"\033[91m[ERROR] Failed to save messages to file: {e}\033[0m")
+    
     async def add_message(self, role: str, content: Any):
-        self.messages.append({"role": role, "content": content})
+        message = {"role": role, "content": content, "timestamp": datetime.datetime.now().isoformat()}
+        self.messages.append(message)
+        # Save messages in real-time
+        await self.save_messages_to_file()
 
     async def stream_llm_response(self, session, payload):
-        try:
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_API_KEY.strip()}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://brandcompliance.onrender.com",
-                "X-Title": "Brand Compliance Tool",
-                "User-Agent": "BrandCompliance/1.0.0"
-            }
-            payload_size = len(json.dumps(payload))
-        except Exception as e:
-            if self.on_stream:
-                await self.on_stream({"type": "text", "content": f"Error setting up API request: {str(e)}"})
-                await self.on_stream({"type": "complete", "content": "Analysis failed due to API request setup error."})
-            raise
-        try:
-            request_start_time = time.time()
-            # Add a strict timeout to the API call
-            async with session.post(
-                OPENROUTER_API_URL,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            ) as resp:
-                print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Response status: {resp.status}\033[0m")
-                print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Response headers: {resp.headers}\033[0m")
-                
-                # Check for error status codes
-                if resp.status != 200:
-                    response_text = await resp.text()
-                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Status {resp.status} - Response text: {response_text[:500]}\033[0m")
-                    
-                    # Try to parse the error response as JSON
-                    error_data = {}
-                    error_message = f"OpenRouter API returned status code {resp.status}"
-                    error_metadata = {}
-                    
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        async with session.post(OPENROUTER_API_URL, headers=headers, json=payload) as resp:
+            async for line in resp.content:
+                if line.startswith(b"data: "):
+                    data = line[6:].decode("utf-8").strip()
+                    if data == "[DONE]":
+                        break
                     try:
-                        error_json = json.loads(response_text)
-                        if 'error' in error_json:
-                            error_data = error_json['error']
-                            if 'message' in error_data:
-                                error_message = error_data['message']
-                            if 'metadata' in error_data:
-                                error_metadata = error_data['metadata']
-                    except Exception as e:
-                        print(f"\033[91m[ERROR] Could not parse error response as JSON: {str(e)}\033[0m")
-                    
-                    # Handle specific error codes based on OpenRouter documentation
-                    user_friendly_message = "An error occurred while processing your request."
-                    
-                    if resp.status == 400:
-                        user_friendly_message = "Bad request: The API request was invalid. This might be due to missing or incorrect parameters."
-                    elif resp.status == 401:
-                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: AUTHENTICATION ERROR - API KEY NOT VALID\033[0m")
-                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: Using environment key: {HAS_ENV_KEY}\033[0m")
-                        # Print the first few chars of the key for debugging without revealing the whole key
-                        key_preview = OPENROUTER_API_KEY[:8] + '...' if OPENROUTER_API_KEY else 'None'
-                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: API key starts with: {key_preview}\033[0m")
-                        user_friendly_message = "Authentication failed: The API key for OpenRouter is invalid or expired. Please check your API key."
-                    elif resp.status == 402:
-                        user_friendly_message = "Payment required: Your OpenRouter account has insufficient credits. Please add more credits to your account."
-                    elif resp.status == 403:
-                        user_friendly_message = "Content flagged: Your input was flagged by content moderation."
-                        # Add moderation details if available
-                        if 'reasons' in error_metadata:
-                            reasons = error_metadata['reasons']
-                            user_friendly_message += f" Reasons: {', '.join(reasons)}"
-                    elif resp.status == 408:
-                        user_friendly_message = "Request timeout: The OpenRouter API request timed out."
-                    elif resp.status == 429:
-                        user_friendly_message = "Too many requests: You are being rate limited. Please try again later."
-                    elif resp.status == 502:
-                        user_friendly_message = "Bad gateway: The selected AI model is currently unavailable or returned an invalid response."
-                    elif resp.status == 503:
-                        user_friendly_message = "Service unavailable: No available model provider meets your routing requirements."
-                    
-                    # Send appropriate error message through the stream
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": f"Error: {user_friendly_message}"})
-                        await self.on_stream({"type": "complete", "content": "Analysis failed due to API error."})
-                    
-                    # Construct detailed error for logs and exception
-                    detailed_error = f"{error_message}. Status: {resp.status}"
-                    if error_metadata:
-                        detailed_error += f", Metadata: {json.dumps(error_metadata)}"
-                    
-                    raise Exception(detailed_error)
-                # Stream the response
-                data_received = False
-                content_generated = False
-                try:
-                    async for line in resp.content:
-                        if line.startswith(b"data: "):
-                            data = line[6:].decode("utf-8").strip()
-                            if data == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data)
-                                data_received = True
-                                
-                                # Check if this chunk contains actual content
-                                if 'choices' in chunk and len(chunk['choices']) > 0:
-                                    delta = chunk['choices'][0].get('delta', {})
-                                    if delta.get('content') or delta.get('tool_calls'):
-                                        content_generated = True
-                                
-                                yield chunk
-                            except Exception as e:
-                                print(f"\033[93m[WARN] Error parsing chunk: {str(e)} - Data: {data[:100]}\033[0m")
-                                continue
-                except Exception as e:
-                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Stream processing error: {str(e)}\033[0m")
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": f"Error processing stream content: {str(e)}"})
-                        await self.on_stream({"type": "complete", "content": "Analysis failed due to stream error."})
-                    raise
-                
-                # Handle the case when no data is received at all
-                if not data_received:
-                    # Try to read the full response body for debugging
-                    try:
-                        resp_text = await resp.text()
-                        error_message = f"Error: No streaming data received from OpenRouter API. Response body: {resp_text[:500]}"
-                    except Exception as e:
-                        error_message = f"Error: No streaming data received from OpenRouter API. Could not read response body: {e}"
-                    
-                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: {error_message}\033[0m")
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": error_message})
-                        await self.on_stream({"type": "complete", "content": "Analysis failed due to no data from AI service."})
-                    raise Exception(error_message)
-                
-                # Handle the case when data is received but no content is generated
-                # This may happen during model cold starts or scaling operations
-                if data_received and not content_generated:
-                    message = "No content was generated by the AI model. This may occur when the model is warming up from a cold start or the system is scaling up. "
-                    message += "Note that you may still be charged for the prompt processing cost. Please try again in a few moments."
-                    
-                    print(f"\033[93m[WARN] OpenRouterAgent.stream_llm_response: No content generated - likely cold start or scaling\033[0m")
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": message})
-                        await self.on_stream({"type": "complete", "content": "Analysis completed with no content generated."})
-                    
-                    # This is not necessarily an error, so we don't raise an exception
-                    # But we log it clearly for monitoring
-        except Exception as e:
-            if self.on_stream:
-                await self.on_stream({"type": "text", "content": f"OpenRouter API request failed: {str(e)}"})
-                await self.on_stream({"type": "complete", "content": "Analysis failed due to API request error."})
-            raise
+                        chunk = json.loads(data)
+                        yield chunk
+                    except Exception:
+                        continue
 
     def extract_xml_tool_call(self, text: str):
-        # Find the first XML block in the text
+        """
+        Extract tool call information from XML blocks in the text.
+        
+        Supports multiple formats including:
+        - Standard XML format: <tool_name>...</tool_name>
+        - Python formatted blocks: <|python_start|>tool_name>...</tool_name><|python_end|>
+        """
+        # Check for Python-style tool call format
+        python_pattern = r"<\|python_start\|>([a-zA-Z0-9_]+)>(.*?)</\1><\|python"
+        python_match = re.search(python_pattern, text, re.DOTALL)
+        if python_match:
+            tool_name = python_match.group(1)
+            content = python_match.group(2)
+            # Extract content between tool tags to create proper XML
+            proper_xml = f"<{tool_name}>{content}</{tool_name}>"
+            try:
+                # Parse the reconstructed XML
+                xml_dict = xmltodict.parse(proper_xml)
+                return tool_name, xml_dict[tool_name]
+            except Exception as e:
+                print(f"\033[91m[ERROR] Failed to parse Python-style tool call: {e}\033[0m")
+                return None, None
+        
+        # Standard XML pattern
         xml_pattern = r"<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>"
         match = re.search(xml_pattern, text)
         if match:
             tag = match.group(1)
             xml_content = match.group(0)
+            
+            # Skip processing if tag is a common inner tag (not a valid tool)
+            inner_tags = ["timestamp", "tool_name", "task_detail", "image_base64", "tool_input"]
+            if tag in inner_tags:
+                print(f"\033[93m[WARNING] Found inner tag '{tag}' as outer tag. Looking for proper tool tag.\033[0m")
+                # Try to find the actual tool tag
+                proper_tool_pattern = r"<(get_[a-zA-Z0-9_]+|check_[a-zA-Z0-9_]+|analyze_[a-zA-Z0-9_]+|attempt_completion)>([\s\S]*?)</\1>"
+                proper_match = re.search(proper_tool_pattern, text)
+                if proper_match:
+                    tag = proper_match.group(1)
+                    xml_content = proper_match.group(0)
+                    print(f"\033[92m[RECOVERY] Found proper tool tag: {tag}\033[0m")
+                else:
+                    print(f"\033[91m[ERROR] Could not find proper tool tag in the content\033[0m")
+                    return None, None
+            
             try:
                 xml_dict = xmltodict.parse(xml_content)
                 # If the outer tag is "xml", extract the first child as the real tool
@@ -236,23 +153,21 @@ class OpenRouterAgent:
                     else:
                         return None, None
                 return tag, xml_dict[tag]
-            except Exception:
-                return tag, None
+            except Exception as e:
+                print(f"\033[91m[ERROR] XML parsing error for tag '{tag}': {e}\033[0m")
+                return None, None
         return None, None
 
     async def process(
         self,
         user_prompt: str,
-        image_base64: Optional[str] = None,
-        media_type: Optional[str] = None,
-        video_path: Optional[str] = None,
-        video_url: Optional[str] = None,
-        frame_interval: int = 5,
-        similarity_threshold: float = 0.7,
-        retry_with_fallback: bool = True  # Add an option to retry with a fallback model
+        image_base64: str = None,
+        media_type: str = "image/png",
+        video_path: str = None,
+        video_url: str = None,
+        frame_interval: float = 1.0,
+        similarity_threshold: float = 0.8,
     ):
-        print(f"\033[91m[LOG] OpenRouterAgent.process: >>> ENTERED agent.process <<<\033[0m")
-        print(f"\033[94m[LOG] OpenRouterAgent.process: Starting with model {self.model}\033[0m")
         """
         Process an image or video for compliance analysis.
 
@@ -265,44 +180,14 @@ class OpenRouterAgent:
             frame_interval: Interval (seconds) for frame extraction.
             similarity_threshold: Similarity threshold for frame deduplication.
         """
-        try:
-            import time
-            process_start_time = time.time()
-            print(f"\033[94m[LOG] OpenRouterAgent.process: Started at {process_start_time:.3f}\033[0m")
-            print(f"\033[94m[LOG] OpenRouterAgent.process: API KEY check: {OPENROUTER_API_KEY}\033[0m")
-            print(f"\033[94m[LOG] OpenRouterAgent.process: API URL: {OPENROUTER_API_URL}\033[0m")
-            user_content = []
-        except Exception as e:
-            print(f"\033[91m[ERROR] OpenRouterAgent.process: Error in setup: {str(e)}\033[0m")
-            traceback.print_exc()
-            if self.on_stream:
-                await self.on_stream({"type": "text", "content": f"Error in setup: {str(e)}"})
-                await self.on_stream({"type": "complete", "content": "Analysis failed due to setup error."})
-            raise
+        import time
+        process_start_time = time.time()
+        print(f"[LOG] OpenRouterAgent.process: Started at {process_start_time:.3f}")
+        user_content = []
         frames = []
         temp_dir = None
 
-        try:
-            if image_base64:
-                print(f"\033[94m[LOG] OpenRouterAgent.process: Processing image, media_type: {media_type}\033[0m")
-                try:
-                    user_content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_base64}"}})
-                    print(f"\033[94m[LOG] OpenRouterAgent.process: Successfully added image to message\033[0m")
-                except Exception as e:
-                    print(f"\033[91m[ERROR] OpenRouterAgent.process: Error adding image to message: {str(e)}\033[0m")
-                    traceback.print_exc()
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": f"Error processing image: {str(e)}"})
-                        await self.on_stream({"type": "complete", "content": "Analysis failed due to image processing error."})
-                    raise
-        except Exception as e:
-            print(f"\033[91m[ERROR] OpenRouterAgent.process: Error processing image: {str(e)}\033[0m")
-            traceback.print_exc()
-            if self.on_stream:
-                await self.on_stream({"type": "text", "content": f"Error processing image: {str(e)}"})
-                await self.on_stream({"type": "complete", "content": "Analysis failed due to image processing error."})
-            raise
-
+        # Video support
         if media_type.startswith("video/") or video_path or video_url:
             clarification = (
                 "You are analyzing a video. "
@@ -320,17 +205,9 @@ class OpenRouterAgent:
                     video_path = video_path_tuple
             # Extract frames
             from app.core.video_agent.gemini_llm import extract_frames
-            try:
-                frames = await extract_frames(
-                    video_path, initial_interval=frame_interval, similarity_threshold=similarity_threshold
-                )
-            except Exception as e:
-                print(f"\033[91m[ERROR] OpenRouterAgent.process: Error extracting frames: {str(e)}\033[0m")
-                traceback.print_exc()
-                if self.on_stream:
-                    await self.on_stream({"type": "text", "content": f"Error processing video: {str(e)}"})
-                    await self.on_stream({"type": "complete", "content": "Analysis failed due to video processing error."})
-                raise
+            frames = await extract_frames(
+                video_path, initial_interval=frame_interval, similarity_threshold=similarity_threshold
+            )
             # Build user_content: instruction + all frames as image_url
             instruction = (
                 f"{user_prompt}\n"
@@ -384,102 +261,17 @@ class OpenRouterAgent:
 
         session = aiohttp.ClientSession()
         tool_trace = []
-        attempted_models = []  # Keep track of which models we've tried
-        attempted_models.append(self.model)  # Add the current model
-        
         try:
-            # Add a diagnostic test mode to check connectivity
-            print(f"\033[94m[LOG] OpenRouterAgent.process: Running diagnostic connectivity test\033[0m")
-            # Define fallback models to try if the primary one fails
-            fallback_models = [
-                "anthropic/claude-3-5-sonnet-20240620",  # Different Claude model
-                "google/gemini-1.5-pro",  # Try Gemini as fallback
-                "openai/gpt-4-turbo",  # Try GPT-4 as fallback
-                "meta-llama/llama-3-70b-instruct"  # Try Llama as last resort
-            ]
-            
-            # Remove current model from fallbacks if it's in the list
-            if self.model in fallback_models:
-                fallback_models.remove(self.model)
-            
-            # Main API call loop
-            api_error = None
-            max_retries = 3  # Maximum number of retries for no-content cases
-            retry_count = 0
-            retry_delay = 2  # Initial delay in seconds
-            
             while True:
-                try:
-                    if retry_count > 0:
-                        print(f"\033[93m[WARN] OpenRouterAgent.process: Retry attempt {retry_count}/{max_retries} after no content generated\033[0m")
-                        if self.on_stream:
-                            await self.on_stream({"type": "text", "content": f"Retrying request ({retry_count}/{max_retries})... The model may be warming up."})
-                    
-                    payload = {
-                        "model": self.model,
-                        "messages": self.messages,
-                        "tools": tools,
-                        "stream": True,  # Enable streaming for assistant text
-                    }
-                    # Stream the assistant's response
-                    full_content = ""
-                    tool_calls = None
-                    # Add a tracking variable for chunks and content generation
-                    chunks = []
-                    content_generated = False
-                    
-                    # Call the streaming function which performs the API call
-                    async for chunk in self.stream_llm_response(session, payload):
-                        chunks.append(chunk)
-                        # Extract and process content from each chunk
-                        if 'choices' in chunk and chunk['choices']:
-                            delta = chunk['choices'][0].get('delta', {})
-                            content = delta.get('content')
-                            if content:
-                                content_generated = True
-                                full_content += content
-                                if self.on_stream:
-                                    await self.on_stream({"type": "text", "content": content})
-                    
-                    # Check if we need to retry due to no content generated
-                    if not content_generated and retry_count < max_retries:
-                        retry_count += 1
-                        wait_time = retry_delay * retry_count  # Exponential backoff
-                        print(f"\033[93m[WARN] OpenRouterAgent.process: No content generated, waiting {wait_time}s before retry {retry_count}/{max_retries}\033[0m")
-                        if self.on_stream:
-                            await self.on_stream({"type": "text", "content": f"The model generated no content, possibly due to a cold start. Waiting {wait_time}s before retrying..."})
-                        await asyncio.sleep(wait_time)
-                        continue
-                    
-                    # If we reach here, the API call worked - break out of retry loop
-                    break
-                    
-                except Exception as e:
-                    api_error = e  # Store the most recent error
-                    print(f"\033[91m[ERROR] OpenRouterAgent.process: API call failed with model {self.model}: {str(e)}\033[0m")
-                    
-                    # Try a fallback model if available and enabled
-                    if retry_with_fallback and fallback_models:
-                        next_model = fallback_models.pop(0)  # Get the next fallback model
-                        print(f"\033[93m[WARN] OpenRouterAgent.process: Trying fallback model: {next_model}\033[0m")
-                        self.model = next_model  # Switch to the fallback model
-                        attempted_models.append(next_model)  # Track that we tried this model
-                        continue  # Try again with the new model
-                    else:
-                        # We've tried all fallbacks or fallbacks are disabled
-                        print(f"\033[91m[ERROR] OpenRouterAgent.process: All models failed or no fallbacks available\033[0m")
-                        print(f"\033[91m[ERROR] OpenRouterAgent.process: Attempted models: {attempted_models}\033[0m")
-                        
-                        # Send error message through the stream
-                        if self.on_stream:
-                            await self.on_stream({"type": "text", "content": f"Error: The AI service failed to process your request after trying {len(attempted_models)} different models. Please try again later."})
-                            await self.on_stream({"type": "complete", "content": "Analysis failed due to API service errors."})
-                        
-                        # Re-raise the last error
-                        if api_error:
-                            raise api_error
-                        else:
-                            raise Exception("All models failed and no specific error was captured")
+                payload = {
+                    "model": self.model,
+                    "messages": self.messages,
+                    "tools": tools,
+                    "stream": True,  # Enable streaming for assistant text
+                }
+                # Stream the assistant's response
+                full_content = ""
+                tool_calls = None
                 try:
                     print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Starting API call to {OPENROUTER_API_URL} at {time.time():.3f}\033[0m")
                     async with session.post(
@@ -523,33 +315,14 @@ class OpenRouterAgent:
                             print(f"\033[93m[LOG] Time to first stream chunk: {first_chunk_time - stream_start_time:.3f} seconds\033[0m")
                             print(f"\033[93m[LOG] Time from first chunk to end: {stream_end_time - first_chunk_time:.3f} seconds\033[0m")
                         print(f"\033[95m[LOG] OpenRouterAgent.process: Full content received: {full_content[:200]}{'...[[TRUNCATED]]' if len(full_content) > 200 else ''}\033[0m")
-                        
-                        # Check if we received an empty response
-                        if not full_content.strip():
-                            print(f"\033[91m[ERROR] OpenRouterAgent.process: EMPTY RESPONSE RECEIVED from OpenRouter API\033[0m")
-                            print(f"\033[91m[ERROR] OpenRouterAgent.process: Response status: {resp.status}\033[0m")
-                            print(f"\033[91m[ERROR] OpenRouterAgent.process: Response headers: {resp.headers}\033[0m")
-                            try:
-                                resp_text = await resp.text()
-                                print(f"\033[91m[ERROR] OpenRouterAgent.process: Response body: {resp_text}\033[0m")
-                            except Exception as e:
-                                print(f"\033[91m[ERROR] OpenRouterAgent.process: Could not read response text: {e}\033[0m")
-                            
-                            # Send error message through the stream
-                            if self.on_stream:
-                                await self.on_stream({"type": "text", "content": "Error: The AI service returned an empty response. This might be due to rate limits or network issues."})
-                                await self.on_stream({"type": "complete", "content": "Analysis failed due to AI service error."})
-                                # Raise an exception to stop further processing
-                                raise Exception("Empty response received from OpenRouter API")
-                # This is a duplicate block that was erroneously added during editing - removing it
                 except asyncio.TimeoutError:
-                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Timeout after {self.timeout}s waiting for OpenRouter API response\033[0m")
+                    print(f"\033[91m[ERROR] OpenRouterAgent.process: Timeout after {self.timeout}s waiting for OpenRouter API response\033[0m")
                     if self.on_stream:
                         await self.on_stream({"type": "text", "content": "Timeout error while processing. The request took too long to complete."})
                         await self.on_stream({"type": "complete", "content": "Processing timed out."})
                     raise
                 except Exception as e:
-                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Exception during API call: {str(e)}\033[0m")
+                    print(f"\033[91m[ERROR] OpenRouterAgent.process: Exception during API call: {str(e)}\033[0m")
                     traceback.print_exc()
                     if self.on_stream:
                         await self.on_stream({"type": "text", "content": f"Error while processing: {str(e)}"})
@@ -594,8 +367,24 @@ class OpenRouterAgent:
                     print(f"\033[96m[TOOL CALL] {tool_tag} with input: {str(tool_input)[:200]}...\033[0m")
                     tool_func = get_tool_function(tool_tag)
                     if not tool_func:
-                        print(f"\033[91m[ERROR] Unknown tool: {tool_tag}\033[0m")
-                        raise Exception(f"Unknown tool: {tool_tag}")
+                        error_msg = f"Unknown tool: {tool_tag}. Please use one of the available tools."
+                        print(f"\033[91m[ERROR] {error_msg}\033[0m")
+                        
+                        # Instead of raising an exception, send a helpful error message back to the model
+                        error_feedback = (
+                            f"ERROR: {error_msg}\n\n"
+                            f"The format you used was incorrect. You tried to use '{tool_tag}' which is not a valid tool.\n"
+                            f"Available tools include: get_video_fonts, check_video_frame_specs, extract_verbal_content, attempt_completion, etc.\n"
+                            f"Please try again with the correct format:\n"
+                            f"<tool_name>\n"
+                            f"  <timestamp>10</timestamp>\n"
+                            f"  <task_detail>Your task description</task_detail>\n"
+                            f"</tool_name>\n"
+                        )
+                        
+                        # Send error message as a user message to allow the model to correct itself
+                        await self.add_message("user", error_feedback)
+                        continue
                     # Add image_base64 for video tools based on timestamp, respecting input schema
                     video_tools = {
                         "get_video_color_scheme",
@@ -682,11 +471,16 @@ class OpenRouterAgent:
                     # Continue the loop for the next LLM response (enforce one tool call per response, but allow iterative tool use)
                     continue
                 else:
-                    # No XML tool call, finish
-                    break
+                    # No XML tool call, but don't end the process
+                    # Continue the loop by sending another model message
+                    # Only attempt_completion should end the process
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": "Continuing the analysis..."})      
+                    continue
         finally:
             await session.close()
-            # Write tool trace to file
+            # Final save of all messages
+            await self.save_messages_to_file()
         return self.messages
 
 # Example usage
