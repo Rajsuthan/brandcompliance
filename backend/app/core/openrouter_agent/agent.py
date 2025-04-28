@@ -307,17 +307,6 @@ class OpenRouterAgent:
         try:
             # Add a diagnostic test mode to check connectivity
             print(f"\033[94m[LOG] OpenRouterAgent.process: Running diagnostic connectivity test\033[0m")
-            try:
-                import requests
-                test_response = requests.get("https://openrouter.ai/status", timeout=5)
-                print(f"\033[94m[LOG] OpenRouterAgent.process: OpenRouter status test: {test_response.status_code}\033[0m")
-                print(f"\033[94m[LOG] OpenRouterAgent.process: OpenRouter status response: {test_response.text}\033[0m")
-            except Exception as e:
-                print(f"\033[91m[ERROR] OpenRouterAgent.process: OpenRouter status test failed: {str(e)}\033[0m")
-            
-            except Exception as e:
-                print(f"\033[91m[ERROR] OpenRouterAgent.process: Connectivity test error: {str(e)}\033[0m")
-            
             # Define fallback models to try if the primary one fails
             fallback_models = [
                 "anthropic/claude-3-5-sonnet-20240620",  # Different Claude model
