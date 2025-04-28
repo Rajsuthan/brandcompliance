@@ -18,7 +18,7 @@ import os
 # Get API key from environment variable or use fallback
 # Check if key is available in environment
 HAS_ENV_KEY = "OPENROUTER_API_KEY" in os.environ
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "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")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 # Print diagnostics about the key during import - add more detailed info
 print(f"\033[94m[INIT] OpenRouterAgent: Using {'environment' if HAS_ENV_KEY else 'fallback'} API key\033[0m")
