@@ -23,7 +23,7 @@ from app.core.openrouter_agent.prompt_manager import (
     get_force_completion_prompt
 )
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Constants for timeout settings
