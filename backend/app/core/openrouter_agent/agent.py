@@ -415,11 +415,20 @@ class OpenRouterAgent:
                                             min_diff = diff
                                             frame = f
                                     if frame and "base64" in frame:
-                                        tool_input["image_base64"] = frame["base64"]
+                                        # Video tools expect images_base64 as an array of base64 strings
+                                        tool_input["images_base64"] = [frame["base64"]]
+                                        print(f"\033[92m[LOG] Added frame at timestamp {ts} as images_base64 array\033[0m")
                                 except Exception as e:
                                     print(f"\033[91m[ERROR] Could not extract frame for timestamp {ts}: {e}\033[0m")
-                    elif isinstance(tool_input, dict) and "image_base64" not in tool_input:
-                        tool_input["image_base64"] = image_base64
+                    elif isinstance(tool_input, dict):
+                        # For video tools, add as images_base64 array if not present
+                        if tool_tag in video_tools:
+                            if "images_base64" not in tool_input:
+                                tool_input["images_base64"] = [image_base64] if image_base64 else []
+                                print(f"\033[92m[LOG] Added image as images_base64 array for video tool {tool_tag}\033[0m")
+                        # For other tools, add as image_base64 if not present
+                        elif "image_base64" not in tool_input:
+                            tool_input["image_base64"] = image_base64
                     try:
                         print(f"\033[92m[TOOL EXEC] Executing {tool_tag}...\033[0m")
                         tool_result = await tool_func(tool_input)
