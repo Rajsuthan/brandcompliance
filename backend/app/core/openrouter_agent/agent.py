@@ -89,17 +89,73 @@ class OpenRouterAgent:
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=self.timeout)
             ) as resp:
-                request_end_time = time.time()
+                print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Response status: {resp.status}\033[0m")
+                print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Response headers: {resp.headers}\033[0m")
+                
                 # Check for error status codes
                 if resp.status != 200:
                     response_text = await resp.text()
-                    error_message = f"OpenRouter API returned status code {resp.status}: {response_text}"
+                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Status {resp.status} - Response text: {response_text[:500]}\033[0m")
+                    
+                    # Try to parse the error response as JSON
+                    error_data = {}
+                    error_message = f"OpenRouter API returned status code {resp.status}"
+                    error_metadata = {}
+                    
+                    try:
+                        error_json = json.loads(response_text)
+                        if 'error' in error_json:
+                            error_data = error_json['error']
+                            if 'message' in error_data:
+                                error_message = error_data['message']
+                            if 'metadata' in error_data:
+                                error_metadata = error_data['metadata']
+                    except Exception as e:
+                        print(f"\033[91m[ERROR] Could not parse error response as JSON: {str(e)}\033[0m")
+                    
+                    # Handle specific error codes based on OpenRouter documentation
+                    user_friendly_message = "An error occurred while processing your request."
+                    
+                    if resp.status == 400:
+                        user_friendly_message = "Bad request: The API request was invalid. This might be due to missing or incorrect parameters."
+                    elif resp.status == 401:
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: AUTHENTICATION ERROR - API KEY NOT VALID\033[0m")
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: Using environment key: {HAS_ENV_KEY}\033[0m")
+                        # Print the first few chars of the key for debugging without revealing the whole key
+                        key_preview = OPENROUTER_API_KEY[:8] + '...' if OPENROUTER_API_KEY else 'None'
+                        print(f"\033[91m[CRITICAL] OpenRouterAgent.stream_llm_response: API key starts with: {key_preview}\033[0m")
+                        user_friendly_message = "Authentication failed: The API key for OpenRouter is invalid or expired. Please check your API key."
+                    elif resp.status == 402:
+                        user_friendly_message = "Payment required: Your OpenRouter account has insufficient credits. Please add more credits to your account."
+                    elif resp.status == 403:
+                        user_friendly_message = "Content flagged: Your input was flagged by content moderation."
+                        # Add moderation details if available
+                        if 'reasons' in error_metadata:
+                            reasons = error_metadata['reasons']
+                            user_friendly_message += f" Reasons: {', '.join(reasons)}"
+                    elif resp.status == 408:
+                        user_friendly_message = "Request timeout: The OpenRouter API request timed out."
+                    elif resp.status == 429:
+                        user_friendly_message = "Too many requests: You are being rate limited. Please try again later."
+                    elif resp.status == 502:
+                        user_friendly_message = "Bad gateway: The selected AI model is currently unavailable or returned an invalid response."
+                    elif resp.status == 503:
+                        user_friendly_message = "Service unavailable: No available model provider meets your routing requirements."
+                    
+                    # Send appropriate error message through the stream
                     if self.on_stream:
-                        await self.on_stream({"type": "text", "content": f"API Error: {error_message}"})
+                        await self.on_stream({"type": "text", "content": f"Error: {user_friendly_message}"})
                         await self.on_stream({"type": "complete", "content": "Analysis failed due to API error."})
-                    raise Exception(error_message)
+                    
+                    # Construct detailed error for logs and exception
+                    detailed_error = f"{error_message}. Status: {resp.status}"
+                    if error_metadata:
+                        detailed_error += f", Metadata: {json.dumps(error_metadata)}"
+                    
+                    raise Exception(detailed_error)
                 # Stream the response
                 data_received = False
+                content_generated = False
                 try:
                     async for line in resp.content:
                         if line.startswith(b"data: "):
@@ -109,14 +165,25 @@ class OpenRouterAgent:
                             try:
                                 chunk = json.loads(data)
                                 data_received = True
+                                
+                                # Check if this chunk contains actual content
+                                if 'choices' in chunk and len(chunk['choices']) > 0:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    if delta.get('content') or delta.get('tool_calls'):
+                                        content_generated = True
+                                
                                 yield chunk
-                            except Exception:
+                            except Exception as e:
+                                print(f"\033[93m[WARN] Error parsing chunk: {str(e)} - Data: {data[:100]}\033[0m")
                                 continue
                 except Exception as e:
+                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: Stream processing error: {str(e)}\033[0m")
                     if self.on_stream:
                         await self.on_stream({"type": "text", "content": f"Error processing stream content: {str(e)}"})
                         await self.on_stream({"type": "complete", "content": "Analysis failed due to stream error."})
                     raise
+                
+                # Handle the case when no data is received at all
                 if not data_received:
                     # Try to read the full response body for debugging
                     try:
@@ -124,10 +191,26 @@ class OpenRouterAgent:
                         error_message = f"Error: No streaming data received from OpenRouter API. Response body: {resp_text[:500]}"
                     except Exception as e:
                         error_message = f"Error: No streaming data received from OpenRouter API. Could not read response body: {e}"
+                    
+                    print(f"\033[91m[ERROR] OpenRouterAgent.stream_llm_response: {error_message}\033[0m")
                     if self.on_stream:
                         await self.on_stream({"type": "text", "content": error_message})
                         await self.on_stream({"type": "complete", "content": "Analysis failed due to no data from AI service."})
                     raise Exception(error_message)
+                
+                # Handle the case when data is received but no content is generated
+                # This may happen during model cold starts or scaling operations
+                if data_received and not content_generated:
+                    message = "No content was generated by the AI model. This may occur when the model is warming up from a cold start or the system is scaling up. "
+                    message += "Note that you may still be charged for the prompt processing cost. Please try again in a few moments."
+                    
+                    print(f"\033[93m[WARN] OpenRouterAgent.stream_llm_response: No content generated - likely cold start or scaling\033[0m")
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": message})
+                        await self.on_stream({"type": "complete", "content": "Analysis completed with no content generated."})
+                    
+                    # This is not necessarily an error, so we don't raise an exception
+                    # But we log it clearly for monitoring
         except Exception as e:
             if self.on_stream:
                 await self.on_stream({"type": "text", "content": f"OpenRouter API request failed: {str(e)}"})
@@ -321,8 +404,17 @@ class OpenRouterAgent:
             
             # Main API call loop
             api_error = None
+            max_retries = 3  # Maximum number of retries for no-content cases
+            retry_count = 0
+            retry_delay = 2  # Initial delay in seconds
+            
             while True:
                 try:
+                    if retry_count > 0:
+                        print(f"\033[93m[WARN] OpenRouterAgent.process: Retry attempt {retry_count}/{max_retries} after no content generated\033[0m")
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": f"Retrying request ({retry_count}/{max_retries})... The model may be warming up."})
+                    
                     payload = {
                         "model": self.model,
                         "messages": self.messages,
@@ -332,12 +424,33 @@ class OpenRouterAgent:
                     # Stream the assistant's response
                     full_content = ""
                     tool_calls = None
+                    # Add a tracking variable for chunks and content generation
+                    chunks = []
+                    content_generated = False
                     
                     # Call the streaming function which performs the API call
-                    chunks = []
                     async for chunk in self.stream_llm_response(session, payload):
                         chunks.append(chunk)
-                        
+                        # Extract and process content from each chunk
+                        if 'choices' in chunk and chunk['choices']:
+                            delta = chunk['choices'][0].get('delta', {})
+                            content = delta.get('content')
+                            if content:
+                                content_generated = True
+                                full_content += content
+                                if self.on_stream:
+                                    await self.on_stream({"type": "text", "content": content})
+                    
+                    # Check if we need to retry due to no content generated
+                    if not content_generated and retry_count < max_retries:
+                        retry_count += 1
+                        wait_time = retry_delay * retry_count  # Exponential backoff
+                        print(f"\033[93m[WARN] OpenRouterAgent.process: No content generated, waiting {wait_time}s before retry {retry_count}/{max_retries}\033[0m")
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": f"The model generated no content, possibly due to a cold start. Waiting {wait_time}s before retrying..."})
+                        await asyncio.sleep(wait_time)
+                        continue
+                    
                     # If we reach here, the API call worked - break out of retry loop
                     break
                     
