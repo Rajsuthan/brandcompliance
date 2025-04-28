@@ -15,6 +15,13 @@ from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 # Import tool schemas and functions from the existing tools.py
 from app.core.agent.tools import claude_tools, get_tool_function
+from app.core.openrouter_agent.prompt_manager import (
+    get_tool_result_prompt,
+    get_empty_response_prompt,
+    get_format_guidance_prompt,
+    get_iteration_milestone_prompt,
+    get_force_completion_prompt
+)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -41,12 +48,12 @@ class OpenRouterAgent:
         self.timeout = timeout
         self.save_messages = save_messages
         self.conversation_id = str(uuid.uuid4())
-        
+
         # Create logs directory if it doesn't exist
         self.logs_dir = Path("logs/conversations")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.messages_file = self.logs_dir / f"{self.conversation_id}.json"
-        
+
         print(f"\033[94m[LOG] OpenRouterAgent.__init__: Initialized with model {model} and timeout {timeout}s\033[0m")
         if self.save_messages:
             print(f"\033[94m[LOG] OpenRouterAgent.__init__: Messages will be saved to {self.messages_file}\033[0m")
@@ -55,7 +62,7 @@ class OpenRouterAgent:
         """Save current messages to a JSON file in real-time."""
         if not self.save_messages:
             return
-            
+
         try:
             timestamp = datetime.datetime.now().isoformat()
             data = {
@@ -64,14 +71,14 @@ class OpenRouterAgent:
                 "timestamp": timestamp,
                 "messages": self.messages
             }
-            
+
             with open(self.messages_file, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
-                
+
             print(f"\033[92m[LOG] Saved messages to {self.messages_file}\033[0m")
         except Exception as e:
             print(f"\033[91m[ERROR] Failed to save messages to file: {e}\033[0m")
-    
+
     async def add_message(self, role: str, content: Any):
         message = {"role": role, "content": content, "timestamp": datetime.datetime.now().isoformat()}
         self.messages.append(message)
@@ -98,7 +105,7 @@ class OpenRouterAgent:
     def extract_xml_tool_call(self, text: str):
         """
         Extract tool call information from XML blocks in the text.
-        
+
         Supports multiple formats including:
         - Standard XML format: <tool_name>...</tool_name>
         - Python formatted blocks: <|python_start|>tool_name>...</tool_name><|python_end|>
@@ -118,14 +125,14 @@ class OpenRouterAgent:
             except Exception as e:
                 print(f"\033[91m[ERROR] Failed to parse Python-style tool call: {e}\033[0m")
                 return None, None
-        
+
         # Standard XML pattern
         xml_pattern = r"<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>"
         match = re.search(xml_pattern, text)
         if match:
             tag = match.group(1)
             xml_content = match.group(0)
-            
+
             # Skip processing if tag is a common inner tag (not a valid tool)
             inner_tags = ["timestamp", "tool_name", "task_detail", "image_base64", "tool_input"]
             if tag in inner_tags:
@@ -140,7 +147,7 @@ class OpenRouterAgent:
                 else:
                     print(f"\033[91m[ERROR] Could not find proper tool tag in the content\033[0m")
                     return None, None
-            
+
             try:
                 xml_dict = xmltodict.parse(xml_content)
                 # If the outer tag is "xml", extract the first child as the real tool
@@ -261,8 +268,12 @@ class OpenRouterAgent:
 
         session = aiohttp.ClientSession()
         tool_trace = []
+        iteration_count = 0
+        max_iterations = 5  # Maximum number of iterations before forcing attempt_completion
         try:
             while True:
+                iteration_count += 1
+                print(f"\033[94m[LOG] OpenRouterAgent.process: Starting iteration {iteration_count}\033[0m")
                 payload = {
                     "model": self.model,
                     "messages": self.messages,
@@ -271,15 +282,14 @@ class OpenRouterAgent:
                 }
                 # Stream the assistant's response
                 full_content = ""
-                tool_calls = None
                 try:
                     print(f"\033[94m[LOG] OpenRouterAgent.stream_llm_response: Starting API call to {OPENROUTER_API_URL} at {time.time():.3f}\033[0m")
                     async with session.post(
-                        OPENROUTER_API_URL, 
+                        OPENROUTER_API_URL,
                         headers={
                             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                             "Content-Type": "application/json",
-                        }, 
+                        },
                         json=payload,
                         timeout=aiohttp.ClientTimeout(total=self.timeout)
                     ) as resp:
@@ -315,6 +325,18 @@ class OpenRouterAgent:
                             print(f"\033[93m[LOG] Time to first stream chunk: {first_chunk_time - stream_start_time:.3f} seconds\033[0m")
                             print(f"\033[93m[LOG] Time from first chunk to end: {stream_end_time - first_chunk_time:.3f} seconds\033[0m")
                         print(f"\033[95m[LOG] OpenRouterAgent.process: Full content received: {full_content[:200]}{'...[[TRUNCATED]]' if len(full_content) > 200 else ''}\033[0m")
+
+                        # Check if the response is empty or contains only special characters/whitespace
+                        stripped_content = re.sub(r'[\s\W]+', '', full_content)
+                        if not stripped_content:
+                            print(f"\033[91m[WARNING] OpenRouterAgent.process: Empty or invalid response detected\033[0m")
+                            # Send a detailed feedback message to the model
+                            # Get the appropriate prompt from the prompt manager
+                            feedback_message = get_empty_response_prompt(self.model)
+                            await self.add_message("user", feedback_message)
+                            if self.on_stream:
+                                await self.on_stream({"type": "text", "content": "Providing additional guidance to complete the analysis..."})
+                            continue
                 except asyncio.TimeoutError:
                     print(f"\033[91m[ERROR] OpenRouterAgent.process: Timeout after {self.timeout}s waiting for OpenRouter API response\033[0m")
                     if self.on_stream:
@@ -328,7 +350,7 @@ class OpenRouterAgent:
                         await self.on_stream({"type": "text", "content": f"Error while processing: {str(e)}"})
                         await self.on_stream({"type": "complete", "content": "Processing failed with an error."})
                     raise
-                
+
                 # After streaming is done, extract XML tool call(s) and stream both text and tool
                 if self.on_stream and full_content:
                     # Find all XML tool call blocks
@@ -361,6 +383,22 @@ class OpenRouterAgent:
                             break
                 # XML tool call protocol: parse XML from assistant's text
                 await self.add_message("assistant", {"content": full_content})
+
+                # Check if the content contains any attempt_completion pattern but not in proper XML format
+                # This helps catch cases where the LLM is trying to use the tool but with incorrect formatting
+                attempt_completion_pattern = re.search(r'attempt_completion|final compliance|final analysis|compliance analysis', full_content.lower())
+                xml_pattern = re.search(r'<[a-zA-Z0-9_]+>[\s\S]*?</[a-zA-Z0-9_]+>', full_content)
+
+                if attempt_completion_pattern and not xml_pattern and iteration_count >= 2:
+                    print(f"\033[93m[WARNING] OpenRouterAgent.process: Detected attempt_completion intent without proper XML format\033[0m")
+                    # Send guidance on proper XML formatting
+                    # Get the appropriate prompt from the prompt manager
+                    format_guidance = get_format_guidance_prompt(self.model)
+                    await self.add_message("user", format_guidance)
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": "Providing guidance on proper tool format..."})
+                    continue
+
                 # Only process the first XML tool call in the response
                 tool_tag, tool_input = self.extract_xml_tool_call(full_content)
                 if tool_tag and tool_input:
@@ -369,7 +407,7 @@ class OpenRouterAgent:
                     if not tool_func:
                         error_msg = f"Unknown tool: {tool_tag}. Please use one of the available tools."
                         print(f"\033[91m[ERROR] {error_msg}\033[0m")
-                        
+
                         # Instead of raising an exception, send a helpful error message back to the model
                         error_feedback = (
                             f"ERROR: {error_msg}\n\n"
@@ -381,7 +419,7 @@ class OpenRouterAgent:
                             f"  <task_detail>Your task description</task_detail>\n"
                             f"</tool_name>\n"
                         )
-                        
+
                         # Send error message as a user message to allow the model to correct itself
                         await self.add_message("user", error_feedback)
                         continue
@@ -462,14 +500,8 @@ class OpenRouterAgent:
                             })
                         })
                     # Send tool result as a new user message (not as a tool message)
-                    tool_result_message = (
-                        f"TOOL RESULT for <{tool_tag}>:\n"
-                        f"{tool_result}\n\n"
-                        f"You have received the result for <{tool_tag}>. "
-                        f"Use this information to decide the next step. "
-                        f"If more analysis is needed, call another tool using an XML block. "
-                        f"If you are ready, provide your final answer."
-                    )
+                    # Get the appropriate prompt from the prompt manager
+                    tool_result_message = get_tool_result_prompt(self.model, tool_tag, tool_result)
                     await self.add_message("user", tool_result_message)
                     # If attempt_completion, send "complete" event and end the loop
                     if tool_tag == "attempt_completion":
@@ -483,8 +515,28 @@ class OpenRouterAgent:
                     # No XML tool call, but don't end the process
                     # Continue the loop by sending another model message
                     # Only attempt_completion should end the process
-                    if self.on_stream:
-                        await self.on_stream({"type": "text", "content": "Continuing the analysis..."})      
+
+                    # Check if we've reached the maximum number of iterations without attempt_completion
+                    if iteration_count >= max_iterations:
+                        print(f"\033[91m[WARNING] OpenRouterAgent.process: Reached {iteration_count} iterations without attempt_completion, forcing completion\033[0m")
+                        # Send a more direct message to force the model to use attempt_completion
+                        # Get the appropriate prompt from the prompt manager
+                        force_completion_message = get_force_completion_prompt(self.model)
+                        await self.add_message("user", force_completion_message)
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": "Requesting final compliance analysis..."})
+                    # Check if we've hit a multiple of 10 iterations (10, 20, 30, etc.)
+                    elif iteration_count % 10 == 0:
+                        print(f"\033[93m[INFO] OpenRouterAgent.process: Reached {iteration_count} iterations, providing reminder\033[0m")
+                        # Send a reminder message about the number of iterations
+                        # Get the appropriate prompt from the prompt manager
+                        reminder_message = get_iteration_milestone_prompt(self.model, iteration_count)
+                        await self.add_message("user", reminder_message)
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": f"Iteration {iteration_count} reminder sent..."})
+                    else:
+                        if self.on_stream:
+                            await self.on_stream({"type": "text", "content": "Continuing the analysis..."})
                     continue
         finally:
             await session.close()
