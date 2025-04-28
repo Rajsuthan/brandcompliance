@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional, Callable, Awaitable
 # Import tool schemas and functions from the existing tools.py
 from app.core.agent.tools import claude_tools, get_tool_function
 
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Constants for timeout settings
