@@ -23,7 +23,7 @@ from app.core.openrouter_agent.prompt_manager import (
     get_force_completion_prompt
 )
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Constants for timeout settings
@@ -269,17 +269,44 @@ class OpenRouterAgent:
         session = aiohttp.ClientSession()
         tool_trace = []
         iteration_count = 0
-        max_iterations = 5  # Maximum number of iterations before forcing attempt_completion
+        max_iterations = 20  # Maximum number of iterations before suggesting attempt_completion
+
+        # Flag to track if we should switch models mid-process
+        switch_to_gemini = False
+        gemini_models = ["google/gemini-2.5-flash-preview", "google/gemini-2.5-pro-preview-03-25"]
+        gemini_model_index = 0  # To alternate between available Gemini models if needed
+
+        # Variables to track response times for model switching
+        last_response_time = time.time()
+        model_switch_timeout = 60  # Switch model if no response for 60 seconds
         try:
             while True:
                 iteration_count += 1
                 print(f"\033[94m[LOG] OpenRouterAgent.process: Starting iteration {iteration_count}\033[0m")
+                # Check if we should switch models due to timeout
+                current_time = time.time()
+                time_since_last_response = current_time - last_response_time
+
+                if time_since_last_response > model_switch_timeout and not switch_to_gemini and "google" not in self.model:
+                    switch_to_gemini = True
+                    old_model = self.model
+                    self.model = gemini_models[gemini_model_index]
+                    gemini_model_index = (gemini_model_index + 1) % len(gemini_models)
+                    print(f"\033[95m[MODEL SWITCH] No response for {time_since_last_response:.1f} seconds. Changing model from {old_model} to {self.model}\033[0m")
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": f"No response for {int(time_since_last_response)} seconds. Switching to model: {self.model}..."})
+
+                # Prepare payload based on model type
                 payload = {
                     "model": self.model,
                     "messages": self.messages,
                     "tools": tools,
                     "stream": True,  # Enable streaming for assistant text
                 }
+
+                # Add usage tracking for OpenRouter
+                if "google" not in self.model:
+                    payload["usage"] = {"include": True}  # Track token usage for non-Gemini models
                 # Stream the assistant's response
                 full_content = ""
                 try:
@@ -317,6 +344,8 @@ class OpenRouterAgent:
                                             print(f"\033[92m[LOG] First stream chunk received at {first_chunk_time:.3f} ({first_chunk_time - stream_start_time:.3f}s after stream start)\033[0m")
                                         full_content += chunk_content
                                         chunk_count += 1
+                                        # Update last response time whenever we get a chunk
+                                        last_response_time = time.time()
                                         print(f"\033[96m[STREAM CHUNK {chunk_count}] {chunk_content}\033[0m")
                         stream_end_time = time.time()
                         print(f"\033[91m[LOG] OpenRouterAgent.process: Streaming ended at {stream_end_time:.3f}\033[0m")
@@ -325,6 +354,18 @@ class OpenRouterAgent:
                             print(f"\033[93m[LOG] Time to first stream chunk: {first_chunk_time - stream_start_time:.3f} seconds\033[0m")
                             print(f"\033[93m[LOG] Time from first chunk to end: {stream_end_time - first_chunk_time:.3f} seconds\033[0m")
                         print(f"\033[95m[LOG] OpenRouterAgent.process: Full content received: {full_content[:200]}{'...[[TRUNCATED]]' if len(full_content) > 200 else ''}\033[0m")
+
+                        # Log token usage if available in the response
+                        if hasattr(resp, 'headers') and 'x-openrouter-usage' in resp.headers:
+                            try:
+                                usage_data = json.loads(resp.headers['x-openrouter-usage'])
+                                print(f"\033[96m[TOKEN USAGE] Prompt tokens: {usage_data.get('prompt_tokens', 'N/A')}, Completion tokens: {usage_data.get('completion_tokens', 'N/A')}, Total tokens: {usage_data.get('total_tokens', 'N/A')}\033[0m")
+
+                                # If we're using a non-Gemini model, log the token usage cost
+                                if "google" not in self.model:
+                                    print(f"\033[96m[TOKEN COST] ${usage_data.get('usd_cost', 0):.6f} USD\033[0m")
+                            except Exception as e:
+                                print(f"\033[93m[WARNING] Could not parse token usage from headers: {e}\033[0m")
 
                         # Check if the response is empty or contains only special characters/whitespace
                         stripped_content = re.sub(r'[\s\W]+', '', full_content)
@@ -509,6 +550,9 @@ class OpenRouterAgent:
                             # Only send the final answer (tool_result) as the complete event
                             await self.on_stream({"type": "complete", "content": tool_result})
                         break
+                    # Update the last response time since we got a successful tool execution
+                    last_response_time = time.time()
+
                     # Continue the loop for the next LLM response (enforce one tool call per response, but allow iterative tool use)
                     continue
                 else:
@@ -516,15 +560,18 @@ class OpenRouterAgent:
                     # Continue the loop by sending another model message
                     # Only attempt_completion should end the process
 
+                    # Update the last response time since we got a response
+                    last_response_time = time.time()
+
                     # Check if we've reached the maximum number of iterations without attempt_completion
                     if iteration_count >= max_iterations:
-                        print(f"\033[91m[WARNING] OpenRouterAgent.process: Reached {iteration_count} iterations without attempt_completion, forcing completion\033[0m")
-                        # Send a more direct message to force the model to use attempt_completion
+                        print(f"\033[93m[INFO] OpenRouterAgent.process: Reached {iteration_count} iterations without attempt_completion, suggesting completion\033[0m")
+                        # Send a message to suggest the model to consider using attempt_completion
                         # Get the appropriate prompt from the prompt manager
-                        force_completion_message = get_force_completion_prompt(self.model)
-                        await self.add_message("user", force_completion_message)
+                        suggestion_message = get_force_completion_prompt(self.model)
+                        await self.add_message("user", suggestion_message)
                         if self.on_stream:
-                            await self.on_stream({"type": "text", "content": "Requesting final compliance analysis..."})
+                            await self.on_stream({"type": "text", "content": "Checking if analysis is ready for completion..."})
                     # Check if we've hit a multiple of 10 iterations (10, 20, 30, etc.)
                     elif iteration_count % 10 == 0:
                         print(f"\033[93m[INFO] OpenRouterAgent.process: Reached {iteration_count} iterations, providing reminder\033[0m")

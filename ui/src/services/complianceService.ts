@@ -5,8 +5,8 @@
 
 // Base URL for the API
 // local
-// export const API_BASE_URL = "http://localhost:8001";
-export const API_BASE_URL = "https://brandcompliance.onrender.com";
+export const API_BASE_URL = "http://localhost:8000";
+// export const API_BASE_URL = "https://brandcompliance.onrender.com";
 
 // Interface for authentication response
 interface AuthResponse {
