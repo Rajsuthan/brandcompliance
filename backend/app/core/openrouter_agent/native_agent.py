@@ -572,12 +572,17 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     
                                     # Stream the results (both tool and complete events)
                                     if self.message_handler.on_stream:
+                                        # Define a safe task detail that works even if attempt_completion_summary is None
+                                        task_detail = "Final compliance analysis"
+                                        if attempt_completion_summary is not None:
+                                            task_detail = attempt_completion_summary.get("task_detail", "Final compliance analysis")
+                                        
                                         # First ensure we signal this is a tool event
                                         await self.message_handler.on_stream({
                                             "type": "tool",
                                             "content": json.dumps({
                                                 "tool_name": "attempt_completion",
-                                                "task_detail": attempt_completion_summary.get("task_detail", "Final compliance analysis"),
+                                                "task_detail": task_detail,
                                                 "tool_result": final_result
                                             })
                                         })
@@ -587,7 +592,7 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                             "type": "complete",
                                             "content": json.dumps({
                                                 "tool_name": "attempt_completion",
-                                                "task_detail": attempt_completion_summary.get("task_detail", "Final compliance analysis"),
+                                                "task_detail": task_detail,
                                                 "tool_result": final_result
                                             })
                                         })
