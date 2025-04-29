@@ -556,9 +556,32 @@ class OpenRouterAgent:
                     # Continue the loop for the next LLM response (enforce one tool call per response, but allow iterative tool use)
                     continue
                 else:
-                    # No XML tool call, but don't end the process
-                    # Continue the loop by sending another model message
-                    # Only attempt_completion should end the process
+                    # No XML tool call found, send a message to instruct the model to use proper XML format
+                    print(f"\033[93m[WARNING] OpenRouterAgent.process: No valid XML tool call found in response\033[0m")
+
+                    # Send guidance on proper XML formatting for tool calls
+                    xml_guidance_message = (
+                        "You must use the proper XML format for tool calls. Please format your response like this:\n\n"
+                        "<tool_name>\n"
+                        "<parameter1_name>value1</parameter1_name>\n"
+                        "<parameter2_name>value2</parameter2_name>\n"
+                        "<tool_name>tool_name</tool_name>\n"
+                        "<task_detail>Brief description of what you're checking</task_detail>\n"
+                        "</tool_name>\n\n"
+                        "For example, to check image clarity:\n\n"
+                        "<check_image_clarity>\n"
+                        "<region_coordinates>100,100,200,200</region_coordinates>\n"
+                        "<element_type>logo</element_type>\n"
+                        "<min_clarity_score>85</min_clarity_score>\n"
+                        "<tool_name>check_image_clarity</tool_name>\n"
+                        "<task_detail>Check logo clarity</task_detail>\n"
+                        "</check_image_clarity>\n\n"
+                        "Please try again with the correct XML format."
+                    )
+
+                    await self.add_message("user", xml_guidance_message)
+                    if self.on_stream:
+                        await self.on_stream({"type": "text", "content": "Providing guidance on proper XML format for tool calls..."})
 
                     # Update the last response time since we got a response
                     last_response_time = time.time()

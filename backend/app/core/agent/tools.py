@@ -1995,14 +1995,14 @@ async def check_image_clarity(data):
         region_coordinates = data.get("region_coordinates", "")
         element_type = data.get("element_type", "unknown")
         min_clarity_score = int(data.get("min_clarity_score", 80))  # Default to 80 if not provided
-        
+
         # Get the image data
         image_base64 = data.get("image_base64")
         if not image_base64:
             return json.dumps({
                 "error": "No image data provided"
             })
-            
+
         # Parse region coordinates
         try:
             # Handle different coordinate formats
@@ -2024,40 +2024,94 @@ async def check_image_clarity(data):
             return json.dumps({
                 "error": f"Error parsing region coordinates: {str(coord_error)}"
             })
-            
+
         # Ensure the image is properly padded for base64 decoding
         padding_needed = len(image_base64) % 4
         if padding_needed != 0:
             image_base64 += "=" * (4 - padding_needed)
-            
+
         # Decode the base64 image
         try:
             image_data = base64.b64decode(image_base64)
             from PIL import Image, ImageFilter
             import numpy as np
             from io import BytesIO
-            
+
             # Open the image
             img = Image.open(BytesIO(image_data))
-            
+
             # Crop to the region of interest
             region = img.crop((x1, y1, x2, y2))
-            
-            # Calculate clarity metrics
+
+            # Save the region for result
+            buffer = BytesIO()
+            region.save(buffer, format="PNG")
+            region_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+            # Calculate multiple clarity metrics for more accurate assessment
+
             # 1. Laplacian variance (higher variance = sharper image)
             np_region = np.array(region.convert("L"))  # Convert to grayscale numpy array
             laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
             conv = np.abs(np.convolve(np_region.flatten(), laplacian.flatten(), mode="same"))
             laplacian_variance = np.var(conv)
-            
-            # 2. Calculate a clarity score (0-100)
-            # This is a simplified approach - in a real implementation, you'd use more sophisticated metrics
-            max_expected_variance = 500  # This is a tunable parameter based on expected image quality
-            clarity_score = min(100, int((laplacian_variance / max_expected_variance) * 100))
-            
+
+            # 2. Edge detection - more edges usually means sharper image
+            edge_image = region.filter(ImageFilter.FIND_EDGES)
+            edge_data = np.array(edge_image.convert("L"))
+            edge_mean = np.mean(edge_data)
+
+            # 3. High-frequency content analysis using FFT
+            from scipy import fftpack
+            f = np.fft.fft2(np_region)
+            fshift = np.fft.fftshift(f)
+            magnitude_spectrum = 20*np.log(np.abs(fshift))
+            # Calculate high frequency energy (higher frequencies are further from center)
+            h, w = magnitude_spectrum.shape
+            center_y, center_x = h//2, w//2
+            # Create a mask that weights pixels by distance from center
+            y, x = np.ogrid[:h, :w]
+            dist_from_center = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+            # Normalize distances
+            max_dist = np.sqrt(center_x**2 + center_y**2)
+            normalized_dist = dist_from_center / max_dist
+            # Weight the magnitude spectrum by distance
+            weighted_spectrum = magnitude_spectrum * normalized_dist
+            high_freq_energy = np.sum(weighted_spectrum) / (h * w)
+
+            # Combine metrics with appropriate weights
+            # Adjust these weights based on testing with your specific images
+            if element_type.lower() == "logo":
+                # Logos need very high clarity - be more strict
+                max_expected_variance = 400  # Lower threshold for logos
+                edge_weight = 0.4
+                laplacian_weight = 0.4
+                high_freq_weight = 0.2
+
+                # For logos, we need to be more strict about the minimum score
+                if min_clarity_score < 85:
+                    min_clarity_score = 85  # Override to ensure logos are very clear
+            else:
+                # Other elements can be slightly less strict
+                max_expected_variance = 500
+                edge_weight = 0.3
+                laplacian_weight = 0.5
+                high_freq_weight = 0.2
+
+            # Calculate weighted clarity score (0-100)
+            laplacian_score = min(100, int((laplacian_variance / max_expected_variance) * 100))
+            edge_score = min(100, int((edge_mean / 50) * 100))  # Normalize to 0-100
+            high_freq_score = min(100, int((high_freq_energy / 30) * 100))  # Normalize to 0-100
+
+            clarity_score = int(
+                laplacian_score * laplacian_weight +
+                edge_score * edge_weight +
+                high_freq_score * high_freq_weight
+            )
+
             # Determine if the clarity meets the minimum requirement
             meets_requirement = clarity_score >= min_clarity_score
-            
+
             # Prepare the result
             result = {
                 "element_type": element_type,
@@ -2066,25 +2120,35 @@ async def check_image_clarity(data):
                 "min_required": min_clarity_score,
                 "meets_requirement": meets_requirement,
                 "assessment": "Clear" if meets_requirement else "Blurry",
+                "detailed_metrics": {
+                    "laplacian_score": laplacian_score,
+                    "edge_detection_score": edge_score,
+                    "high_frequency_score": high_freq_score
+                },
+                "region_image_base64": region_base64,
                 "recommendations": []
             }
-            
+
             # Add recommendations if clarity is insufficient
             if not meets_requirement:
                 result["recommendations"].append("Increase the resolution of the image")
                 result["recommendations"].append(f"Ensure the {element_type} is not obscured or blurred")
-                if element_type == "logo":
+                if element_type.lower() == "logo":
+                    result["recommendations"].append("⚠️ CRITICAL COMPLIANCE ISSUE: Logo blur detected")
                     result["recommendations"].append("Use the vector version of the logo if available")
-                elif element_type == "text":
+                    result["recommendations"].append("Logo clarity is a mandatory brand requirement")
+                    # Add a more prominent warning in the assessment
+                    result["assessment"] = "⚠️ CRITICAL: Blurred Logo Detected"
+                elif element_type.lower() == "text":
                     result["recommendations"].append("Increase the font size or use a clearer font")
-            
+
             return json.dumps(result)
-            
+
         except Exception as img_error:
             return json.dumps({
                 "error": f"Error processing image: {str(img_error)}"
             })
-            
+
     except Exception as e:
         return json.dumps({
             "error": f"Error in check_image_clarity: {str(e)}"

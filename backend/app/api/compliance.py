@@ -113,7 +113,7 @@ async def process_image_and_stream(
     image_base64: str, media_type: str, text: str, user_id: str
 ):
     print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
-    print(f"[LOG] process_image_and_stream: Using model: claude-3-5-sonnet-20241022 (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_image_and_stream: Using model: anthropic/claude-3-7-sonnet-20250219 (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: media_type: {media_type} (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: text: {text} (line {inspect.currentframe().f_lineno})")
@@ -162,24 +162,44 @@ async def process_image_and_stream(
     else:
         print(f"[LOG] process_image_and_stream: No user feedback found (line {inspect.currentframe().f_lineno})")
 
-    # Create an OpenRouterAgent instance
-    print(f"[LOG] process_image_and_stream: Instantiating OpenRouterAgent (line {inspect.currentframe().f_lineno})")
-    from app.core.openrouter_agent.agent import OpenRouterAgent
-
-    agent = OpenRouterAgent(
-        model="meta-llama/llama-4-maverick",
+    # Create an OpenRouterAgent instance using our native implementation with Claude 3.7 Sonnet
+    # Claude is better suited for image compliance analysis with its ability to detect visual details
+    print(f"[LOG] process_image_and_stream: Instantiating OpenRouterNativeAgent with Claude 3.7 (line {inspect.currentframe().f_lineno})")
+    from app.core.openrouter_agent.native_agent import OpenRouterAgent as OpenRouterNativeAgent
+    
+    # Get the OpenRouter API key from environment variables
+    import os
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    if not OPENROUTER_API_KEY:
+        print(f"\033[91m[ERROR] OPENROUTER_API_KEY not found in environment variables\033[0m")
+        raise ValueError("OPENROUTER_API_KEY environment variable is required")
+    
+    print(f"\033[94m[INFO] Using OpenRouter API key: {OPENROUTER_API_KEY[:5]}...\033[0m")
+    
+    # Note: The OpenRouterNativeAgent uses OPENROUTER_TIMEOUT internally, so we don't pass timeout here
+    agent = OpenRouterNativeAgent(
+        api_key=OPENROUTER_API_KEY,  # Required parameter
+        model="anthropic/claude-3-7-sonnet",  # Using Claude 3.7 Sonnet for improved compliance analysis
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
+        temperature=0.1  # Lower temperature for more consistent outputs
     )
 
     # Start the agent process in a background task
     print(f"[LOG] process_image_and_stream: Creating processing_task for OpenRouterAgent (line {inspect.currentframe().f_lineno})")
     try:
+        # Ensure image_base64 doesn't include the prefix if it's already there
+        if image_base64.startswith("data:image/"):
+            # Extract only the base64 portion if it includes the data URL prefix
+            image_base64 = image_base64.split(",")[1]
+        
+        print(f"[DEBUG] Image base64 length: {len(image_base64)} characters")
+        
         processing_task = asyncio.create_task(
             agent.process(
                 user_prompt=text,
                 image_base64=image_base64,
-                media_type=media_type,
+                # No need to pass media_type - native agent handles image format internally
             )
         )
     except Exception as e:
@@ -201,7 +221,11 @@ async def process_image_and_stream(
                 data = await asyncio.wait_for(queue.get(), timeout=1.0)
                 print(f"[LOG] process_image_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
 
+                # Process data from the native agent implementation
                 event_type = data.get("type")
+                print(f"[LOG] process_image_and_stream: Received event_type: {event_type} (line {inspect.currentframe().f_lineno})")
+                
+                # Handle text events - these come directly from the model
                 if event_type == "text":
                     # If we were buffering a tool, yield it now
                     if tool_buffering and tool_buffer:
@@ -217,49 +241,39 @@ async def process_image_and_stream(
 
                     content = data["content"]
                     print(f"[LOG] process_image_and_stream: Handling text content: {content} (line {inspect.currentframe().f_lineno})")
-                    if not (content.strip().startswith("<") and ">" in content):
-                        # Final check for any attempt_completion XML in the text before yielding
-                        ac_match_final = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
-                        if ac_match_final:
-                            xml_block = "<attempt_completion>" + ac_match_final.group(1) + "</attempt_completion>"
-                            try:
-                                xml_dict = xmltodict.parse(xml_block)
-                                ac = xml_dict.get("attempt_completion", {})
-                                tool_event = {
-                                    "tool_name": "attempt_completion",
-                                    "tool_input": {},
-                                    "task_detail": ac.get("task_detail") or "Final compliance result",
-                                    "result": ac.get("result") or ""
-                                }
-                                event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
-                                yield event_data
-                                event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
-                                yield event_data_complete
-                                break
-                            except Exception:
-                                event_data = f"data: text:{content}\n\n"
-                                print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
-                                yield event_data
-                                last_yield_time = time.time()
-                        else:
-                            event_data = f"data: text:{content}\n\n"
-                            print(f"[LOG] process_image_and_stream: Yielding event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
-                            yield event_data
-                            last_yield_time = time.time()
+                    
+                    # With native agent, we don't need to parse XML anymore
+                    # Simply pass through the text content
+                    event_data = f"data: text:{content}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding text event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    yield event_data
+                    last_yield_time = time.time()
                 elif event_type == "tool":
-                    # If the content is already valid JSON, yield immediately
-                    try:
-                        json.loads(data["content"])
-                        event_data = f"data: tool:{data['content']}\n\n"
-                        print(f"[LOG] process_image_and_stream: Yielding tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
-                        yield event_data
-                        last_yield_time = time.time()
-                    except Exception:
-                        # If not valid JSON, buffer as before (for XML or partial)
-                        tool_buffer += data["content"]
-                        tool_buffering = True
-                        print(f"[LOG] process_image_and_stream: Buffering tool content: {tool_buffer} (line {inspect.currentframe().f_lineno})")
-                    # Do not try to parse or yield yet; wait for next non-tool event
+                    # With the native implementation, tool events are properly formatted JSON
+                    print(f"[LOG] process_image_and_stream: Processing tool event (line {inspect.currentframe().f_lineno})")
+                    
+                    # Extract the tool details
+                    tool_content = data.get("content", "{}")
+                    print(f"[LOG] process_image_and_stream: Tool content type: {type(tool_content)} (line {inspect.currentframe().f_lineno})")
+                    
+                    # If it's a string, try to parse it as JSON
+                    if isinstance(tool_content, str):
+                        try:
+                            tool_content = json.loads(tool_content)
+                            print(f"[LOG] process_image_and_stream: Parsed tool_content as JSON (line {inspect.currentframe().f_lineno})")
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Failed to parse tool_content as JSON: {e} (line {inspect.currentframe().f_lineno})")
+                            # Use as is if it's not valid JSON
+                    
+                    # Check if this is an attempt_completion tool - special handling for completion status
+                    tool_name = tool_content.get("tool_name") if isinstance(tool_content, dict) else None
+                    print(f"[LOG] process_image_and_stream: Tool name: {tool_name} (line {inspect.currentframe().f_lineno})")
+                    
+                    # Forward the tool event to the client
+                    event_data = f"data: tool:{json.dumps(tool_content) if isinstance(tool_content, dict) else tool_content}\n\n"
+                    print(f"[LOG] process_image_and_stream: Yielding tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    yield event_data
+                    last_yield_time = time.time()
                 elif event_type == "complete":
                     # If we were buffering a tool, yield it now
                     if tool_buffering and tool_buffer:
@@ -273,10 +287,32 @@ async def process_image_and_stream(
                         tool_buffer = ""
                         tool_buffering = False
 
-                    # Only yield the final answer as the complete event, then break
+                    # For the native agent, the complete event contains the final detailed compliance report
+                    # with compliance_status, detailed_report, and summary
                     final_answer = data.get("content", "")
-                    event_data = f"data: complete:{final_answer}\n\n"
-                    print(f"[LOG] process_image_and_stream: Yielding complete event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
+                    print(f"[LOG] process_image_and_stream: Processing complete event with content type: {type(final_answer)} (line {inspect.currentframe().f_lineno})")
+                    
+                    # If it's a string, try to parse it as JSON (in case it's serialized)
+                    if isinstance(final_answer, str):
+                        try:
+                            # Check if it looks like JSON
+                            if final_answer.strip().startswith('{'):
+                                parsed_answer = json.loads(final_answer)
+                                final_answer = parsed_answer
+                                print(f"[LOG] process_image_and_stream: Parsed complete content as JSON (line {inspect.currentframe().f_lineno})")
+                        except Exception as e:
+                            print(f"[LOG] process_image_and_stream: Content is not JSON: {e} (line {inspect.currentframe().f_lineno})")
+                            # Use as is if parsing fails
+                    
+                    # Format the completion event based on content type
+                    if isinstance(final_answer, dict):
+                        # Our native agent returns a structured response
+                        event_data = f"data: complete:{json.dumps(final_answer)}\n\n"
+                    else:
+                        # Just a string - pass as is
+                        event_data = f"data: complete:{final_answer}\n\n"
+                    
+                    print(f"[LOG] process_image_and_stream: Yielding complete event_data: {event_data.strip()[:200]}... (line {inspect.currentframe().f_lineno})")
                     yield event_data
                     break
                 elif event_type in ("status", "error"):
@@ -503,7 +539,7 @@ async def process_video_and_stream(
     from app.core.openrouter_agent.agent import OpenRouterAgent
 
     agent = OpenRouterAgent(
-        model="meta-llama/llama-4-maverick",
+        model="google/gemini-2.5-flash-preview",
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
     )

@@ -5,3 +5,5 @@ This document provides an overview and specific instructions for AI agents worki
 ## 1. Project Overview
 
 The goal of this project is to develop an AI-powered system that automatically checks advertising assets (images and videos) against a brand's specific guidelines. The system should analyze both visual and verbal elements to determine compliance and provide detailed feedback, including sources from the brand guidelines. The ultimate objective is to achieve consistently high accuracy (>95%) across all defined compliance parameters for any brand using the system.
+
+
