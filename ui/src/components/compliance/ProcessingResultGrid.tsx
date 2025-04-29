@@ -543,6 +543,25 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
         );
       }
 
+      // If it has a 'result' property as a string (single result)
+      if (parsed && parsed.tool_result && parsed.tool_result.detailed_report && typeof parsed.tool_result.detailed_report === "string") {
+        return (
+          <ReactMarkdown components={MarkdownComponents}>
+            {parsed.tool_result.detailed_report}
+          </ReactMarkdown>
+        );
+      }
+
+
+      // If it has a 'result' property as a string (single result)
+      if (parsed && parsed.detailed_report && typeof parsed.detailed_report === "string") {
+        return (
+          <ReactMarkdown components={MarkdownComponents}>
+            {parsed.detailed_report}
+          </ReactMarkdown>
+        );
+      }
+
       // If we got here, it's a JSON object but not in the expected format
       // Fall back to displaying the stringified JSON
       return (

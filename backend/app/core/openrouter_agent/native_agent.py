@@ -127,8 +127,65 @@ class OpenRouterAgent:
         # Track last response time to detect timeouts
         last_response_time = time.time()
         
-        # Add the user prompt as a message, including image if provided
-        if image_base64:
+        # Add the user prompt as a message, including image(s) if provided
+        if frames:
+            # We have video frames to process - create a multimodal message with all frames
+            print(f"\033[94m[INFO] Processing video with {len(frames)} frames\033[0m")
+            
+            # Start with the text component
+            message_content = [{"type": "text", "text": user_prompt}]
+            
+            # Add each frame as an image - support up to 25 frames
+            max_frames = 25  # Updated maximum frames limit
+            
+            # Only sample frames if we have more than the maximum limit
+            if len(frames) > max_frames:
+                print(f"\033[93m[WARNING] Video has {len(frames)} frames, sampling down to {max_frames}\033[0m")
+                sampling_step = len(frames) // max_frames
+                if sampling_step < 1:
+                    sampling_step = 1
+            else:
+                sampling_step = 1  # Use all frames if under the limit
+                
+            for i, frame in enumerate(frames):
+                # Apply sampling if needed
+                if len(frames) > max_frames and i % sampling_step != 0 and i > 0 and i < len(frames) - 1:
+                    # Skip frames based on sampling, but always keep first and last frame
+                    continue
+                        
+                # Extract the image data (the key should be 'image_data' from compliance.py)
+                image_data = frame.get("image_data")
+                if not image_data:
+                    print(f"\033[91m[ERROR] Frame {i} missing image_data, skipping\033[0m")
+                    # Debug what keys are actually available
+                    print(f"\033[93m[DEBUG] Frame {i} has keys: {list(frame.keys())}\033[0m")
+                    continue
+                    
+                # Add debugging info
+                frame_number = frame.get("frame_number", i)
+                timestamp = frame.get("timestamp", i * 0.5)
+                print(f"\033[94m[DEBUG] Processing frame number {frame_number} at timestamp {timestamp:.2f}s\033[0m")
+                    
+                # Check image size and potentially reduce detail level for large images
+                image_size_kb = len(image_data) / 1024  # Convert to KB
+                detail_level = "high" if image_size_kb < 500 else "low"  # More aggressive size management for multiple frames
+                
+                # Add the image to the message
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_data}",
+                        "detail": detail_level
+                    }
+                })
+                
+                print(f"\033[94m[INFO] Added frame {i} ({image_size_kb:.1f}KB) with {detail_level} detail\033[0m")
+            
+            await self.message_handler.add_message("user", message_content)
+            self.has_image = True
+            
+        elif image_base64:
+            # Single image processing - standard behavior
             # Check image size and potentially reduce detail level for large images
             image_size_kb = len(image_base64) / 1024  # Convert to KB
             detail_level = "high" if image_size_kb < 1000 else "low"  # Use low detail for images > 1MB
@@ -400,6 +457,11 @@ class OpenRouterAgent:
                                 # Handle attempt_completion results (even incomplete ones)
                                 print(f"\033[94m[DEBUG] Raw attempt_completion result: {tool_result}\033[0m")
                                 
+                                # Safety check: if tool_result is None, handle it gracefully
+                                if tool_result is None:
+                                    print(f"\033[91m[ERROR] attempt_completion tool_result is None\033[0m")
+                                    tool_result = "No result available"
+                                
                                 # Try multiple approaches to extract useful data
                                 attempt_completion_summary = {}
                                 
@@ -546,18 +608,99 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     
                                     print(f"\033[94m[INFO] Generating final report with {len(messages_for_completion)} messages in context\033[0m")
                                     
-                                    # Generate the final detailed report with full context
-                                    final_report_response = await self.client.chat.completions.create(
-                                        model=self.model,
-                                        messages=messages_for_completion,
-                                        temperature=self.temperature,
-                                        max_tokens=4000,  # Allow longer response for detailed report
-                                        stream=False  # No streaming for final report
-                                    )
+                                    # Generate the final detailed report with full context with retry logic
+                                    max_retries = 3
+                                    retry_count = 0
+                                    detailed_report = None
+                                    last_error = None
                                     
-                                    # Extract the final detailed report
-                                    detailed_report = final_report_response.choices[0].message.content
+                                    # First, stream a message to the client that we're generating the final report
+                                    if self.message_handler.on_stream:
+                                        await self.message_handler.on_stream({
+                                            "type": "text",
+                                            "content": "Generating final compliance analysis report..."
+                                        })
                                     
+                                    while retry_count < max_retries and detailed_report is None:
+                                        try:
+                                            # If we hit image format errors, try to fix common issues
+                                            if retry_count > 0 and last_error and "Image does not match the provided media type" in str(last_error):
+                                                print(f"\033[93m[WARNING] Retry {retry_count}: Image format issue detected, attempting to fix\033[0m")
+                                                # Try to fix image issues by ensuring all images use proper MIME types
+                                                for msg in messages_for_completion:
+                                                    if isinstance(msg.get('content'), list):
+                                                        for content_item in msg['content']:
+                                                            if isinstance(content_item, dict) and content_item.get('type') == 'image_url':
+                                                                # Ensure image URL uses generic image/png mime type regardless of actual format
+                                                                if 'url' in content_item.get('image_url', {}) and 'base64' in content_item['image_url']['url']:
+                                                                    # Standardize to image/png for all images as it's more widely supported
+                                                                    image_data = content_item['image_url']['url'].split(',', 1)[-1]
+                                                                    content_item['image_url']['url'] = f"data:image/png;base64,{image_data}"
+                                            
+                                            print(f"\033[94m[INFO] Retry {retry_count}: Generating final report with {len(messages_for_completion)} messages\033[0m")
+                                            
+                                            # If retrying, consider removing the image on later retries
+                                            if retry_count >= 2:
+                                                print(f"\033[93m[WARNING] Last retry attempt - removing images to ensure completion\033[0m")
+                                                # Remove images completely on last retry
+                                                for msg in messages_for_completion:
+                                                    if isinstance(msg.get('content'), list):
+                                                        msg['content'] = [item for item in msg['content'] if not (isinstance(item, dict) and item.get('type') == 'image_url')]
+                                            
+                                            final_report_response = await self.client.chat.completions.create(
+                                                model=self.model,
+                                                messages=messages_for_completion,
+                                                temperature=self.temperature,
+                                                max_tokens=4000,  # Allow longer response for detailed report
+                                                stream=False  # No streaming for final report
+                                            )
+                                            
+                                            # Extract the final detailed report
+                                            if final_report_response and final_report_response.choices and len(final_report_response.choices) > 0:
+                                                detailed_report = final_report_response.choices[0].message.content
+                                                print(f"\033[94m[INFO] Successfully generated detailed report of {len(detailed_report)} characters\033[0m")
+                                                
+                                                # Stream the detailed report as text
+                                                if self.message_handler.on_stream:
+                                                    await self.message_handler.on_stream({
+                                                        "type": "text",
+                                                        "content": f"Final compliance report: {detailed_report[:200]}..."
+                                                    })
+                                            else:
+                                                print(f"\033[91m[ERROR] Final report response has incomplete structure: {final_report_response}\033[0m")
+                                                last_error = f"Incomplete API response: {final_report_response}"
+                                                retry_count += 1
+                                        except Exception as report_error:
+                                            print(f"\033[91m[ERROR] Failed to generate detailed report (attempt {retry_count+1}/{max_retries}): {str(report_error)}\033[0m")
+                                            last_error = report_error
+                                            retry_count += 1
+                                            await asyncio.sleep(1)  # Brief pause between retries
+                                    
+                                    # If all retries failed, use a fallback
+                                    if detailed_report is None or detailed_report.strip() == "":
+                                        print(f"\033[91m[ERROR] All {max_retries} attempts to generate report failed or returned empty result\033[0m")
+                                        
+                                        # Try to salvage information from the attempt_completion tool if we have it
+                                        if attempt_completion_summary and isinstance(attempt_completion_summary, dict):
+                                            # Extract any valuable information from the tool call
+                                            compliance_status = attempt_completion_summary.get("compliance_status", "unknown")
+                                            compliance_summary = attempt_completion_summary.get("compliance_summary", "")
+                                            tool_input = attempt_completion_summary.get("tool_input", {})
+                                            
+                                            # Check if the tool_input already contains useful information
+                                            if isinstance(tool_input, dict) and ("compliance_status" in tool_input or "compliance_summary" in tool_input):
+                                                print(f"\033[93m[WARNING] Using compliance data from tool_input as fallback\033[0m")
+                                                compliance_status_input = tool_input.get("compliance_status", compliance_status)
+                                                compliance_summary_input = tool_input.get("compliance_summary", compliance_summary)
+                                                
+                                                # Construct a reasonable detailed report from the available information
+                                                report_template = "# Brand Compliance Analysis\n\n## Compliance Status: {0}\n\n## Summary\n{1}\n\n*Note: This report was generated using available information from the initial analysis. A full detailed report could not be generated due to technical limitations.*"
+                                                detailed_report = report_template.format(compliance_status_input, compliance_summary_input)
+                                                print(f"\033[94m[INFO] Generated fallback report of {len(detailed_report)} characters using available data\033[0m")
+                                            else:
+                                                detailed_report = f"[Error: After {max_retries} attempts, could not generate detailed compliance report. Last error: {str(last_error)}]"
+                                        else:
+                                            detailed_report = f"[Error: After {max_retries} attempts, could not generate detailed compliance report. Last error: {str(last_error)}]"                                      
                                     # Combine summary status with detailed report
                                     # Ensure attempt_completion_summary is not None before accessing its properties
                                     if attempt_completion_summary is None:

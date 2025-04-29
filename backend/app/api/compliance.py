@@ -457,7 +457,7 @@ async def check_video_compliance(
     try:
         # Create a streaming response
         return StreamingResponse(
-            process_video_and_stream(
+            process_video_frames_and_stream(
                 video_url=video_url,
                 message=message,
                 analysis_modes=analysis_modes,
@@ -475,22 +475,33 @@ async def check_video_compliance(
         )
 
 
-async def process_video_and_stream(
+async def process_video_frames_and_stream(
     video_url: str, message: str, analysis_modes: List[str], user_id: str, brand_name: str = None
 ):
     """
-    Process a video using the video compliance agent and stream the results.
+    Process a video using the native agent implementation with frames extraction.
+    This function is similar to process_image_and_stream but handles video frames.
 
     Args:
         video_url: URL of the video to analyze
         message: Text prompt to send with the video
-        analysis_modes: List of analysis modes to run
+        analysis_modes: List of analysis modes to run (currently only used in prompt)
         user_id: ID of the current user
         brand_name: Optional name of the brand being analyzed
 
     Yields:
         Server-sent events with the streaming results
     """
+    import inspect
+    import json
+    import time
+    
+    print(f"[LOG] process_video_frames_and_stream: Start (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_video_frames_and_stream: Using model: anthropic/claude-3-7-sonnet (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_video_frames_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_video_frames_and_stream: video_url: {video_url} (line {inspect.currentframe().f_lineno})")
+    print(f"[LOG] process_video_frames_and_stream: message: {message} (line {inspect.currentframe().f_lineno})")
+
     # Create a message ID for this request
     message_id = str(uuid4())
 
@@ -535,29 +546,124 @@ async def process_video_and_stream(
     else:
         print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")
 
-    # Create an OpenRouterAgent instance for video compliance
-    from app.core.openrouter_agent.agent import OpenRouterAgent
-
-    agent = OpenRouterAgent(
-        model="google/gemini-2.5-flash-preview",
+    # Download video and extract frames
+    print(f"[LOG] process_video_frames_and_stream: Downloading video from {video_url} (line {inspect.currentframe().f_lineno})")
+    
+    # Import video processing functions
+    from app.core.video_agent.gemini_llm import extract_frames
+    from app.core.video_agent.video_agent_class import download_video
+    
+    # Download the video
+    try:
+        # First yield a status event to inform the client that download is in progress
+        yield "data: status:Downloading video file...\n\n"
+        
+        # Download the video to a temporary file
+        video_path_tuple = await download_video(video_url)
+        video_path = video_path_tuple[0]  # Get the path to the downloaded video
+        
+        # Yield status update
+        yield "data: status:Extracting video frames for analysis...\n\n"
+        
+        # Extract frames from the video (with a reasonable interval to avoid too many frames)
+        frames = await extract_frames(video_path, initial_interval=3.0)  # Extract a frame every 3 seconds
+        
+        print(f"[LOG] process_video_frames_and_stream: Extracted {len(frames)} frames from video (line {inspect.currentframe().f_lineno})")
+        
+        # Convert frames to base64 format for the OpenRouterNativeAgent
+        frame_base64_list = []
+        for frame in frames:
+            if 'base64' in frame:  # Fix: use 'base64' key which is what extract_frames produces
+                # The image data is already in base64 format from the extract_frames function
+                frame_base64_list.append(frame['base64'])
+                
+        print(f"[LOG] process_video_frames_and_stream: Prepared {len(frame_base64_list)} frame images for analysis (line {inspect.currentframe().f_lineno})")
+        
+        # Choose a reasonable subset of frames if there are too many (e.g., max 10 frames)
+        max_frames = 10
+        if len(frame_base64_list) > max_frames:
+            # Take frames at even intervals to cover the whole video
+            step = len(frame_base64_list) // max_frames
+            frame_base64_list = frame_base64_list[::step][:max_frames]
+            print(f"[LOG] process_video_frames_and_stream: Reduced to {len(frame_base64_list)} representative frames (line {inspect.currentframe().f_lineno})")
+        
+    except Exception as e:
+        error_msg = f"Error downloading or processing video: {str(e)}"
+        print(f"\033[91m[ERROR] {error_msg}\033[0m")
+        yield f"data: error:{error_msg}\n\n"
+        return
+    
+    # Get the OpenRouter API key from environment variables
+    import os
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    if not OPENROUTER_API_KEY:
+        print(f"\033[91m[ERROR] OPENROUTER_API_KEY not found in environment variables\033[0m")
+        yield "data: error:OpenRouter API key not configured\n\n"
+        return
+    
+    # Create an OpenRouterNativeAgent instance using our native implementation with Claude 3.7 Sonnet
+    print(f"[LOG] process_video_frames_and_stream: Instantiating OpenRouterNativeAgent with Claude 3.7 (line {inspect.currentframe().f_lineno})")
+    from app.core.openrouter_agent.native_agent import OpenRouterAgent as OpenRouterNativeAgent
+    
+    agent = OpenRouterNativeAgent(
+        api_key=OPENROUTER_API_KEY,
+        model="anthropic/claude-3-7-sonnet",  # Using Claude 3.7 Sonnet for improved compliance analysis
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
+        temperature=0.1  # Lower temperature for more consistent outputs
     )
 
-    # Start the agent process in a background task
+    # Start the agent process in a background task with the extracted frames
     try:
-        processing_task = asyncio.create_task(
-            agent.process(
-                user_prompt=message,
-                video_url=video_url,
-                media_type="video/mp4",  # or infer from URL if needed
+        # Prepare a prompt that explains we're analyzing video frames
+        enhanced_prompt = f"{message}\n\nThis is a video analysis task. I'm providing {len(frame_base64_list)} key frames extracted from the video. Please analyze these frames for brand compliance, paying attention to logo usage, colors, typography, placement, and overall visual identity compliance.".strip()
+        
+        # Yield status update to client
+        yield "data: status:Analyzing video frames for brand compliance...\n\n"
+        
+        # Start the analysis with the frame images
+        if frame_base64_list:
+            print(f"[LOG] process_video_frames_and_stream: Starting analysis with {len(frame_base64_list)} frames (line {inspect.currentframe().f_lineno})")
+            
+            # We'll use the frames property of the native agent to pass multiple frames
+            # Convert frames to the expected format for the agent
+            formatted_frames = []
+            for i, frame_base64 in enumerate(frame_base64_list):
+                # Ensure image_base64 doesn't include the prefix if it's already there
+                if frame_base64.startswith("data:image/"):
+                    # Extract only the base64 portion if it includes the data URL prefix
+                    frame_base64 = frame_base64.split(",")[1]
+                
+                # Debug info
+                if i == 0 or i == len(frame_base64_list)-1:
+                    print(f"\033[94m[DEBUG] Frame {i} base64 length: {len(frame_base64)} characters\033[0m")
+                    
+                formatted_frames.append({
+                    "timestamp": frames[i].get('timestamp', i * 3.0),  # Use actual timestamp if available
+                    "frame_number": frames[i].get('frame_number', i),  # Use actual frame number if available
+                    "image_data": frame_base64  # Key must match what native_agent.py expects
+                })
+            
+            processing_task = asyncio.create_task(
+                agent.process(
+                    user_prompt=enhanced_prompt,
+                    frames=formatted_frames  # Pass the frames as a list to the agent
+                )
             )
-        )
+        else:
+            # Fallback if no frames were extracted
+            print(f"\033[93m[WARNING] No frames extracted from video, trying to use video_url directly\033[0m")
+            processing_task = asyncio.create_task(
+                agent.process(
+                    user_prompt=message,
+                    video_url=video_url,
+                )
+            )
 
         # Send initial status
-        yield "data: status:Starting video download and processing...\n\n"
+        yield "data: status:Analyzing brand compliance across video frames...\n\n"
 
-        # Stream the results
+        # Stream the results - using same approach as image compliance API
         try:
             import time
             last_yield_time = time.time()
@@ -565,91 +671,111 @@ async def process_video_and_stream(
                 try:
                     # Get data from the queue with a timeout
                     data = await asyncio.wait_for(queue.get(), timeout=1.0)
-
+                    print(f"[LOG] process_video_frames_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
+                    
                     event_type = data.get("type")
-                    if event_type == "text":
-                        content = data["content"]
-                        import re
-                        import xmltodict
-                        ac_match = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
-                        if ac_match:
-                            xml_block = "<attempt_completion>" + ac_match.group(1) + "</attempt_completion>"
-                            try:
-                                xml_dict = xmltodict.parse(xml_block)
-                                ac = xml_dict.get("attempt_completion", {})
+                    print(f"[LOG] process_video_frames_and_stream: Received event_type: {event_type} (line {inspect.currentframe().f_lineno})")
+                    
+                    if event_type == "complete":
+                        # This is the final completion event, we need to parse it and yield a complete event
+                        complete_content = data.get("content", "{}")
+                        print(f"[LOG] process_video_frames_and_stream: Received complete event: {complete_content[:100]}... (line {inspect.currentframe().f_lineno})")
+                        
+                        # Try to extract the tool call data and send it as a tool event first
+                        try:
+                            complete_json = json.loads(complete_content)
+                            if isinstance(complete_json, dict) and "tool_name" in complete_json:
+                                # This is a tool event in the complete event
                                 tool_event = {
-                                    "tool_name": "attempt_completion",
+                                    "tool_name": complete_json.get("tool_name"),
                                     "tool_input": {},
-                                    "task_detail": ac.get("task_detail") or "Final compliance result",
-                                    "result": ac.get("result") or ""
-                                }
-                                event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
-                                yield event_data
-                                event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
-                                yield event_data_complete
-                                queue.task_done()
-                                break
-                            except Exception:
-                                event_data = f"data: text:{content}\n\n"
-                                yield event_data
-                                last_yield_time = time.time()
-                        elif not (content.strip().startswith("<") and ">" in content):
-                            # Final check for any attempt_completion XML in the text before yielding
-                            ac_match_final = re.search(r"<attempt_completion>(.*?)</attempt_completion>", content, re.DOTALL)
-                            if ac_match_final:
-                                xml_block = "<attempt_completion>" + ac_match_final.group(1) + "</attempt_completion>"
-                                try:
-                                    xml_dict = xmltodict.parse(xml_block)
-                                    ac = xml_dict.get("attempt_completion", {})
-                                    tool_event = {
-                                        "tool_name": "attempt_completion",
-                                        "tool_input": {},
-                                        "task_detail": ac.get("task_detail") or "Final compliance result",
-                                        "result": ac.get("result") or ""
-                                    }
-                                    event_data = f"data: tool:{json.dumps(tool_event)}\n\n"
-                                    yield event_data
-                                    event_data_complete = f"data: complete:{json.dumps(tool_event)}\n\n"
-                                    yield event_data_complete
-                                    queue.task_done()
-                                    break
-                                except Exception:
-                                    event_data = f"data: {event_type}:{content}\n\n"
-                                    yield event_data
-                                    last_yield_time = time.time()
-                            else:
-                                event_data = f"data: {event_type}:{content}\n\n"
-                                yield event_data
-                                last_yield_time = time.time()
-                    elif event_type == "complete":
-                        complete_content = data.get('content', '')
-                        import re
-                        import xmltodict
-                        ac_match = re.search(r"<attempt_completion>(.*?)</attempt_completion>", complete_content, re.DOTALL)
-                        if ac_match:
-                            xml_block = "<attempt_completion>" + ac_match.group(1) + "</attempt_completion>"
-                            try:
-                                xml_dict = xmltodict.parse(xml_block)
-                                ac = xml_dict.get("attempt_completion", {})
-                                tool_event = {
-                                    "tool_name": "attempt_completion",
-                                    "tool_input": {},
-                                    "task_detail": ac.get("task_detail") or "Final compliance result",
-                                    "result": ac.get("result") or ""
+                                    "task_detail": complete_json.get("task_detail") or "Final compliance analysis",
+                                    "result": complete_json.get("tool_result") or ""
                                 }
                                 event_data_tool = f"data: tool:{json.dumps(tool_event)}\n\n"
                                 yield event_data_tool
-                            except Exception:
-                                pass
+                        except Exception as e:
+                            print(f"\033[91m[ERROR] Error parsing complete event as tool: {str(e)}\033[0m")
+                            # Continue with regular complete event
+                        
+                        try:
+                            # Create a simplified response with just the recommendation
+                            simplified_response = {}
+                            
+                            # Check for errors in the tool_result first
+                            tool_result_error = False
+                            tool_result = None
+                            
+                            if isinstance(complete_json, dict):
+                                tool_result = complete_json.get("tool_result", {})
+                                
+                                # Check if we have an error in the tool_result
+                                if isinstance(tool_result, str) and "Error" in tool_result:
+                                    tool_result_error = True
+                                    print(f"\033[93m[WARNING] Tool result contains error: {tool_result}\033[0m")
+                                
+                                # Also check for empty dict or None result
+                                if not tool_result or (isinstance(tool_result, dict) and not tool_result):
+                                    tool_result_error = True
+                                    print(f"\033[93m[WARNING] Tool result is empty or None\033[0m")
+                                    
+                            # Handle normal case - extract from tool_result
+                            if not tool_result_error and isinstance(tool_result, dict):
+                                detailed_report = tool_result.get("detailed_report", "")
+                                simplified_response["recommendation"] = detailed_report
+                            # Handle error case - try to extract from tool_input
+                            elif isinstance(complete_json, dict) and "tool_input" in complete_json:
+                                print(f"\033[94m[INFO] Using tool_input as fallback for recommendation\033[0m")
+                                tool_input = complete_json.get("tool_input", {})
+                                
+                                if isinstance(tool_input, dict):
+                                    compliance_status = tool_input.get("compliance_status", "unknown")
+                                    compliance_summary = tool_input.get("compliance_summary", "")
+                                    task_detail = tool_input.get("task_detail", "Brand Compliance Analysis")
+                                    
+                                    # Create a formatted recommendation from the original input
+                                    recommendation_template = "# {0}\n\n## Compliance Status: {1}\n\n## Summary\n{2}\n\n*Note: This report was generated from the initial analysis data.*"
+                                    recommendation = recommendation_template.format(task_detail, compliance_status, compliance_summary)
+                                    simplified_response["recommendation"] = recommendation
+                                    print(f"\033[94m[INFO] Created recommendation of {len(recommendation)} characters from tool_input\033[0m")
+                                else:
+                                    simplified_response["recommendation"] = str(tool_result)
+                            else:
+                                simplified_response["recommendation"] = str(complete_json)
+                            
+                            # Replace the complete content with our simplified object
+                            complete_content = json.dumps(simplified_response)
+                            
+                            print(f"\033[94m[INFO] Simplified complete response to just include recommendation\033[0m")
+                        except Exception as e:
+                            print(f"\033[91m[ERROR] Failed to simplify complete event: {str(e)}\033[0m")
+                            # Create a basic response if JSON parsing fails
+                            complete_content = json.dumps({"recommendation": "Error processing compliance report"})
+                            
                         event_data = f"data: complete:{complete_content}\n\n"
                         yield event_data
                         queue.task_done()
                         break
+                    elif event_type == "text":
+                        # Just pass through text events
+                        event_data = f"data: text:{data.get('content', '')}\n\n"
+                        yield event_data
+                    elif event_type == "tool":
+                        # This is a regular tool event
+                        event_data = f"data: tool:{data.get('content', '')}\n\n"
+                        yield event_data
+                    elif event_type == "error":
+                        # An error occurred in the agent
+                        error_content = data.get("content", "Unknown error")
+                        print(f"\033[91m[ERROR] Error in agent: {error_content}\033[0m")
+                        event_data = f"data: error:{error_content}\n\n"
+                        yield event_data
                     else:
+                        # Unknown event type, just pass it through
                         event_data = f"data: {event_type}:{data.get('content', '')}\n\n"
                         yield event_data
-                        last_yield_time = time.time()
-
+                        
+                    # Each iteration of the loop must call task_done() once
                     queue.task_done()
                 except asyncio.TimeoutError:
                     # If more than 5 seconds have passed since last yield, send a user-friendly keep-alive tool event
