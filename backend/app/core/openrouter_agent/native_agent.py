@@ -543,19 +543,7 @@ class OpenRouterAgent:
                                     image_content = None
                                     original_image_message = None
                                     
-                                    # Look for the image in previous messages
-                                    for msg in previous_messages:
-                                        if msg.get("role") == "user" and msg.get("content"):
-                                            content = msg.get("content")
-                                            if isinstance(content, list):
-                                                for item in content:
-                                                    if isinstance(item, dict) and item.get("type") == "image_url":
-                                                        image_content = item
-                                                        original_image_message = msg
-                                                        break
-                                                if image_content:
-                                                    break
-                                    
+                       
                                     print(f"\033[94m[INFO] Image content found for final report: {image_content is not None}\033[0m")
                                     
                                     # Construct the user prompt with the summary and instructions
@@ -585,22 +573,20 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     # Important: Add ALL previous messages including system messages and ALL tool results
                                     # This ensures the model has access to the complete conversation history
                                     for msg in previous_messages:
-                                        messages_for_completion.append(msg)
+                                        if msg["role"] != "system":
+                                            new_content = []
+                                            for c in msg["content"]:
+                                                if c.get("type") != "image_url":
+                                                    new_content.append(c)
+                                            messages_for_completion.append({"role": msg["role"], "content": new_content})
                                     
-                                    # Construct the final user prompt with the image
-                                    # If we found an image in the previous messages, include it in the final prompt
-                                    if image_content:
-                                        # Create a multimodal content array with both text and image
-                                        final_user_prompt = [
-                                            {"type": "text", "text": final_user_prompt_text},
-                                            image_content  # The image content we extracted earlier
-                                        ]
-                                    else:
-                                        # If no image found, just use the text prompt
-                                        print(f"\033[93m[WARNING] No image found for final report generation\033[0m")
-                                        final_user_prompt = final_user_prompt_text
+                                    # IMPORTANT: Do not include the image in the final report generation to avoid format errors
+                                    # Just use the text prompt without the image, as the model already has all the analysis
+                                    # from previous steps and tool calls
+                                    print(f"\033[94m[INFO] Using text-only prompt for final report generation to avoid image format errors\033[0m")
+                                    final_user_prompt = final_user_prompt_text
                                     
-                                    # Add the final user prompt with image at the end
+                                    # Add the final user prompt (text only, no images) at the end
                                     messages_for_completion.append({
                                         "role": "user", 
                                         "content": final_user_prompt
@@ -623,29 +609,15 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     
                                     while retry_count < max_retries and detailed_report is None:
                                         try:
-                                            # If we hit image format errors, try to fix common issues
-                                            if retry_count > 0 and last_error and "Image does not match the provided media type" in str(last_error):
-                                                print(f"\033[93m[WARNING] Retry {retry_count}: Image format issue detected, attempting to fix\033[0m")
-                                                # Try to fix image issues by ensuring all images use proper MIME types
-                                                for msg in messages_for_completion:
-                                                    if isinstance(msg.get('content'), list):
-                                                        for content_item in msg['content']:
-                                                            if isinstance(content_item, dict) and content_item.get('type') == 'image_url':
-                                                                # Ensure image URL uses generic image/png mime type regardless of actual format
-                                                                if 'url' in content_item.get('image_url', {}) and 'base64' in content_item['image_url']['url']:
-                                                                    # Standardize to image/png for all images as it's more widely supported
-                                                                    image_data = content_item['image_url']['url'].split(',', 1)[-1]
-                                                                    content_item['image_url']['url'] = f"data:image/png;base64,{image_data}"
-                                            
+                                            # Remove all images from messages to avoid format errors
+                                  
                                             print(f"\033[94m[INFO] Retry {retry_count}: Generating final report with {len(messages_for_completion)} messages\033[0m")
                                             
-                                            # If retrying, consider removing the image on later retries
-                                            if retry_count >= 2:
-                                                print(f"\033[93m[WARNING] Last retry attempt - removing images to ensure completion\033[0m")
-                                                # Remove images completely on last retry
-                                                for msg in messages_for_completion:
-                                                    if isinstance(msg.get('content'), list):
-                                                        msg['content'] = [item for item in msg['content'] if not (isinstance(item, dict) and item.get('type') == 'image_url')]
+                                            # We already removed images from the final prompt, so no additional action needed here
+                                            
+                                            # Save the final messages in a file for debugging purposes
+                                            with open("final_report_messages.json", "w") as f:
+                                                json.dump(messages_for_completion, f, indent=4)
                                             
                                             final_report_response = await self.client.chat.completions.create(
                                                 model=self.model,

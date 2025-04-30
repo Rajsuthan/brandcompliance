@@ -135,7 +135,7 @@ export default function App() {
         } else {
           await checkImageCompliance(
             item.file,
-            `Analyze this image for ${item.brandName} brand compliance using the provided tools and guidelines. Start by searching for brand guidelines and continue with the analysis. Make sure to do deep research and you must use the provided tools to execute this process.`,
+            `GUESS THE BRAND NAME USED IN THIS IMAGE. THAT IS YOUR ONLY TASK. DO NOT DO ANYTHING ELSE. ONCE YOU IDENTIFY THE BRAND, USE THE 'ATTEMPT_COMPLETION' TOOL TO PROVIDE YOUR ANSWER.`,
             authToken,
             (event) => handleItemComplianceEvent(item.id, event)
           );

@@ -500,6 +500,8 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
       // Try to parse the result as JSON
       const parsed = JSON.parse(resultText);
 
+      console.log(parsed)
+
       // Check if it has a results object with multiple keys
       if (parsed && parsed.results && typeof parsed.results === "object") {
         const resultsObj = parsed.results;

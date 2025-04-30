@@ -3,6 +3,7 @@ import datetime
 from typing import Dict, Any, List, Optional
 
 from app.core.openrouter_agent.tool_definitions import execute_tool
+from app.core.openrouter_agent.tool_cache import tool_cache
 
 async def execute_and_process_tool(
     tool_name: str,
@@ -43,7 +44,15 @@ async def execute_and_process_tool(
             img_len = len(tool_args["image_base64"])
             print(f"\033[92m[IMAGE SIZE] Image in {tool_name}: {img_len} chars\033[0m")
         
-        tool_result = await execute_tool(tool_name, tool_args)
+        # Check if we have a cached result for this tool call
+        cached_result = tool_cache.get(tool_name, tool_args)
+        if cached_result is not None:
+            tool_result = cached_result
+            print(f"\033[92m[CACHE HIT] Using cached result for {tool_name}\033[0m")
+        else:
+            # Execute the tool and cache the result
+            tool_result = await execute_tool(tool_name, tool_args)
+            tool_cache.set(tool_name, tool_args, tool_result)
         
         # Log output sizes
         tool_result_str = str(tool_result)
@@ -62,7 +71,8 @@ async def execute_and_process_tool(
         "tool_name": tool_name,
         "tool_input": tool_args,
         "truncated_result": trunc_tool_result,
-        "full_result": tool_result if tool_name == "attempt_completion" else None
+        "full_result": tool_result if tool_name == "attempt_completion" else None,
+        "cached": cached_result is not None  # Track if result was from cache
     }
     
     # Stream tool result to the client if needed
@@ -140,3 +150,21 @@ async def execute_and_process_tool(
     
     # Return the tool result in the proper OpenAI/OpenRouter compatible format
     return message_format
+
+# Function to get cache statistics for monitoring
+def get_cache_stats():
+    """Get current cache statistics.
+    
+    Returns:
+        Dictionary with cache hit/miss statistics
+    """
+    return tool_cache.get_stats()
+
+# Function to clear the cache
+def clear_cache(tool_name=None):
+    """Clear the tool result cache.
+    
+    Args:
+        tool_name: Optional tool name to clear cache for specific tool only
+    """
+    tool_cache.clear(tool_name)
