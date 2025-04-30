@@ -29,6 +29,10 @@ app.add_middleware(
 async def root():
     return {"message": "Welcome to the Compliance API"}
 
+@app.get("/healthz/")
+async def health_check():
+    return {"status": "ok"}
+
 
 # Include routers
 app.include_router(auth.router, tags=["authentication"])
