@@ -45,7 +45,7 @@ ARG PROJ_NAME="main"
 # Create a bash script to run the FastAPI project
 RUN printf "#!/bin/bash\n" > ./paracord_runner.sh && \
     printf "RUN_PORT=\"\${PORT:-8000}\"\n\n" >> ./paracord_runner.sh && \
-    printf "gunicorn \${PROJ_NAME}:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind \"[::]:\$RUN_PORT\"\n" >> ./paracord_runner.sh
+    printf "gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind \"[::]:\$RUN_PORT\"\n" >> ./paracord_runner.sh
 
 # Make the bash script executable
 RUN chmod +x paracord_runner.sh
