@@ -1,2 +1,12 @@
 [providers]
 python = "3.11"
+
+[phases.setup]
+nixPkgs = ["python311"]
+aptPkgs = ["python3-dev", "build-essential"]
+
+[phases.build]
+cmds = ["python3 -m pip install --upgrade pip", "python3 -m pip install -r backend/requirements.txt"]
+
+[start]
+cmd = "cd backend && gunicorn -c gunicorn_config.py main:app"
