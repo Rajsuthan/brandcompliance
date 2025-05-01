@@ -28,6 +28,15 @@ from app.core.openrouter_agent.media_handler import inject_image_data
 # Constants for timeout settings
 OPENROUTER_TIMEOUT = 120  # 2 minutes timeout for OpenRouter API calls
 
+# Fallback models to try when the primary model fails
+FALLBACK_MODELS = [
+    "openai/gpt-4o",
+    "openai/o3-mini",
+    # "google/gemini-2.5-pro-preview-03-25",
+    "cohere/command-r-08-2024",
+    "openai/gpt-4o"
+]
+
 class OpenRouterAgent:
     def __init__(
         self,
@@ -319,29 +328,104 @@ class OpenRouterAgent:
                     print(f"\033[94m[TIMING] LLM call preparation completed in {llm_prep_duration:.2f}s\033[0m")
                     print(f"\033[94m[TIMING] LLM call started at {datetime.datetime.fromtimestamp(llm_call_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
                     
-                    completion = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=formatted_messages,
-                        tools=self.tools,  # Pass the tool schemas
-                        temperature=self.temperature,
-                        max_tokens=current_max_tokens,
-                        stream=self.stream,
-                        timeout=self.timeout
-                    )
+                    # Try to make the API call with potential model fallback
+                    api_error = None
+                    model_fallback_attempted = False
+                    current_model = self.model
+                    
+                    # Try the current model first
+                    try:
+                        completion = await self.client.chat.completions.create(
+                            model=current_model,
+                            messages=formatted_messages,
+                            tools=self.tools,  # Pass the tool schemas
+                            temperature=self.temperature,
+                            max_tokens=current_max_tokens,
+                            stream=self.stream,
+                            timeout=self.timeout
+                        )
+                    except Exception as model_error:
+                        api_error = model_error
+                        error_msg = str(model_error)
+                        print(f"\033[91m[ERROR] Error with model {current_model}: {error_msg}\033[0m")
+                        
+                        # Check if this is a provider error that requires model fallback
+                        if "Provider returned error" in error_msg:
+                            model_fallback_attempted = True
+                            
+                            # Stream the error to client
+                            if self.message_handler.on_stream:
+                                await self.message_handler.on_stream({
+                                    "type": "text",
+                                    "content": f"The model {current_model} returned an error. Trying with a different model..."
+                                })
+                            
+                            # Try each fallback model in sequence
+                            for fallback_model in FALLBACK_MODELS:
+                                # Skip the current model if it's in the fallback list
+                                if fallback_model == current_model:
+                                    continue
+                                    
+                                print(f"\033[93m[MODEL FALLBACK] Trying fallback model: {fallback_model}\033[0m")
+                                
+                                # Notify the user about the model change
+                                if self.message_handler.on_stream:
+                                    await self.message_handler.on_stream({
+                                        "type": "text",
+                                        "content": f"Trying model: {fallback_model}"
+                                    })
+                                
+                                try:
+                                    # Try with the fallback model
+                                    completion = await self.client.chat.completions.create(
+                                        model=fallback_model,
+                                        messages=formatted_messages,
+                                        tools=self.tools,
+                                        temperature=self.temperature,
+                                        max_tokens=current_max_tokens,
+                                        stream=self.stream,
+                                        timeout=self.timeout
+                                    )
+                                    
+                                    # If we get here, the fallback model worked
+                                    print(f"\033[92m[MODEL FALLBACK] Successfully switched to {fallback_model}\033[0m")
+                                    
+                                    # Update the model for future iterations
+                                    self.model = fallback_model
+                                    current_model = fallback_model
+                                    
+                                    # Clear the error since we succeeded with a fallback model
+                                    api_error = None
+                                    break
+                                except Exception as fallback_error:
+                                    # Log the fallback error and continue to the next model
+                                    print(f"\033[91m[ERROR] Fallback model {fallback_model} also failed: {str(fallback_error)}\033[0m")
+                            
+                            # If we still have an error after trying all fallback models, raise it
+                            if api_error:
+                                print(f"\033[91m[ERROR] All fallback models failed\033[0m")
+                                if self.message_handler.on_stream:
+                                    await self.message_handler.on_stream({
+                                        "type": "error",
+                                        "content": "All available models failed. Please try again later."
+                                    })
+                                raise api_error
                     
                     # Record LLM call end time
                     llm_call_end = time.time()
                     llm_call_duration = llm_call_end - llm_call_start
-                    print(f"\033[94m[TIMING] LLM call completed in {llm_call_duration:.2f}s\033[0m")
+                    print(f"\033[94m[TIMING] LLM call completed in {llm_call_duration:.2f}s with model {current_model}\033[0m")
                     
                     # Add to timing metrics
                     timing_metrics["llm_calls"].append({
                         "purpose": "main_iteration",
                         "iteration": iteration_count,
+                        "model": current_model,
                         "start_time": llm_call_start,
                         "end_time": llm_call_end,
                         "duration": llm_call_duration,
-                        "preparation_time": llm_prep_duration
+                        "preparation_time": llm_prep_duration,
+                        "fallback_attempted": model_fallback_attempted
                     })
                     # Update the last response time since we got a response
                     last_response_time = time.time()
@@ -384,13 +468,61 @@ class OpenRouterAgent:
                                 if current_content:
                                     assistant_message["content"] = current_content
                         except Exception as e:
-                            print(f"\033[91m[ERROR] Error processing completion chunks: {e}\033[0m")
-                            # Stream the error to client
-                            if self.message_handler.on_stream:
-                                await self.message_handler.on_stream({
-                                    "type": "error",
-                                    "content": f"Error processing response: {str(e)}"
-                                })
+                            error_msg = str(e)
+                            print(f"\033[91m[ERROR] Error processing completion chunks: {error_msg}\033[0m")
+                            
+                            # Check if this is a provider error that requires model fallback
+                            if "Provider returned error" in error_msg:
+                                # Stream the error to client
+                                if self.message_handler.on_stream:
+                                    await self.message_handler.on_stream({
+                                        "type": "text",
+                                        "content": f"The model {self.model} returned an error. Trying with a different model..."
+                                    })
+                                
+                                # Find the next model to try
+                                current_model_index = -1
+                                try:
+                                    # If current model is in the fallback list, get its index
+                                    current_model_index = FALLBACK_MODELS.index(self.model)
+                                except ValueError:
+                                    # Current model is not in the fallback list, start with the first fallback model
+                                    pass
+                                
+                                # Get the next model to try
+                                if current_model_index < len(FALLBACK_MODELS) - 1:
+                                    # There are more models to try
+                                    next_model = FALLBACK_MODELS[current_model_index + 1]
+                                    print(f"\033[93m[MODEL FALLBACK] Switching from {self.model} to {next_model}\033[0m")
+                                    
+                                    # Update the model and try again
+                                    self.model = next_model
+                                    
+                                    # Notify the user about the model change
+                                    if self.message_handler.on_stream:
+                                        await self.message_handler.on_stream({
+                                            "type": "text",
+                                            "content": f"Switching to model: {next_model}"
+                                        })
+                                    
+                                    # Continue with the next iteration to retry with the new model
+                                    continue
+                                else:
+                                    # We've tried all models, give up
+                                    print(f"\033[91m[ERROR] All fallback models failed\033[0m")
+                                    if self.message_handler.on_stream:
+                                        await self.message_handler.on_stream({
+                                            "type": "error",
+                                            "content": "All available models failed. Please try again later."
+                                        })
+                            else:
+                                # Not a provider error, just a regular error
+                                # Stream the error to client
+                                if self.message_handler.on_stream:
+                                    await self.message_handler.on_stream({
+                                        "type": "error",
+                                        "content": f"Error processing response: {error_msg}"
+                                    })
                             
                             # Continue with the next iteration if there was an error processing chunks
                             continue
@@ -471,7 +603,21 @@ class OpenRouterAgent:
                                     })
                                     
                                     # Extract the actual tool result from the message format
-                                    tool_result = result_format["content"] if isinstance(result_format, dict) and "content" in result_format else str(result_format)
+                                    if isinstance(result_format, dict) and "content" in result_format:
+                                        tool_result = result_format["content"]
+                                    else:
+                                        tool_result = str(result_format)
+                                        
+                                    # Ensure tool_result is properly formatted for further processing
+                                    # If it's a string that looks like JSON, try to parse it
+                                    if isinstance(tool_result, str):
+                                        try:
+                                            if tool_result.strip().startswith('{') and tool_result.strip().endswith('}'):
+                                                parsed_result = json.loads(tool_result)
+                                                tool_result = parsed_result
+                                        except json.JSONDecodeError:
+                                            # If parsing fails, keep it as a string
+                                            pass
                                     
                                     # Add to tool trace for logging/debugging (minimal format)
                                     tool_trace.append({
@@ -545,6 +691,14 @@ class OpenRouterAgent:
                                 # Approach 1: If it's already a dictionary, use it directly
                                 if isinstance(tool_result, dict):
                                     attempt_completion_summary = tool_result
+                                    print(f"\033[94m[INFO] attempt_completion_summary is a dictionary with keys: {list(attempt_completion_summary.keys())}\033[0m")
+                                    
+                                    # Check if tool_result has a nested structure with 'tool_result' key
+                                    if 'tool_result' in attempt_completion_summary and isinstance(attempt_completion_summary['tool_result'], dict):
+                                        print(f"\033[94m[INFO] Found nested tool_result in attempt_completion_summary\033[0m")
+                                        # Use the nested tool_result instead
+                                        attempt_completion_summary = attempt_completion_summary['tool_result']
+                                        print(f"\033[94m[INFO] Using nested tool_result with keys: {list(attempt_completion_summary.keys())}\033[0m")
                                 
                                 # Approach 2: Try to parse as JSON if it's a string
                                 elif isinstance(tool_result, str):
@@ -561,8 +715,25 @@ class OpenRouterAgent:
                                         else:
                                             # Try to parse as JSON
                                             try:
-                                                attempt_completion_summary = json.loads(cleaned_result)
-                                            except:
+                                                parsed_result = json.loads(cleaned_result)
+                                                print(f"\033[94m[INFO] Successfully parsed string as JSON\033[0m")
+                                                
+                                                # Check if the parsed result is a dictionary
+                                                if isinstance(parsed_result, dict):
+                                                    attempt_completion_summary = parsed_result
+                                                    
+                                                    # Check if there's a nested tool_result
+                                                    if 'tool_result' in attempt_completion_summary and isinstance(attempt_completion_summary['tool_result'], dict):
+                                                        print(f"\033[94m[INFO] Found nested tool_result in parsed JSON\033[0m")
+                                                        attempt_completion_summary = attempt_completion_summary['tool_result']
+                                                else:
+                                                    print(f"\033[93m[WARNING] Parsed JSON is not a dictionary: {type(parsed_result)}\033[0m")
+                                                    attempt_completion_summary = {
+                                                        "compliance_status": "unknown",
+                                                        "compliance_summary": f"Unexpected format: {str(parsed_result)[:300]}..."
+                                                    }
+                                            except json.JSONDecodeError as json_err:
+                                                print(f"\033[93m[WARNING] Failed to parse as JSON: {str(json_err)}\033[0m")
                                                 # If JSON parsing fails, check if we got partial data
                                                 if "compliance_status" in cleaned_result:
                                                     # Extract what we can using string operations
@@ -628,10 +799,22 @@ class OpenRouterAgent:
                                     print(f"\033[94m[INFO] Image content found for final report: {image_content is not None}\033[0m")
                                     
                                     # Construct the user prompt with the summary and instructions
+                                    # Convert attempt_completion_summary to a string representation, regardless of its type
+                                    attempt_completion_str = str(attempt_completion_summary)
+                                    if isinstance(attempt_completion_summary, dict):
+                                        try:
+                                            attempt_completion_str = json.dumps(attempt_completion_summary, indent=2)
+                                        except Exception as json_err:
+                                            # If JSON serialization fails, fall back to string representation
+                                            print(f"\033[93m[WARNING] Failed to serialize attempt_completion_summary to JSON: {str(json_err)}\033[0m")
+                                            attempt_completion_str = str(attempt_completion_summary)
+                                    
+                                    print(f"\033[94m[INFO] Using attempt_completion_str for final report: {attempt_completion_str[:200]}...\033[0m")
+                                    
                                     final_user_prompt_text = f"""Generate a FINAL DETAILED brand compliance analysis report for the image shown.
 
 Here is a summary of key compliance findings from the analysis:
-{json.dumps(attempt_completion_summary, indent=2)}
+{attempt_completion_str}
 
 Your final report MUST include:
 
@@ -654,12 +837,46 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     # Important: Add ALL previous messages including system messages and ALL tool results
                                     # This ensures the model has access to the complete conversation history
                                     for msg in previous_messages:
-                                        if msg["role"] != "system":
+                                        # Skip messages that don't have required fields
+                                        if not isinstance(msg, dict) or "role" not in msg:
+                                            print(f"\033[93m[WARNING] Skipping message without role: {msg}\033[0m")
+                                            continue
+                                            
+                                        # Skip system messages
+                                        if msg["role"] == "system":
+                                            continue
+                                            
+                                        # Handle case where content is missing
+                                        if "content" not in msg:
+                                            print(f"\033[93m[WARNING] Message has no content field: {msg}\033[0m")
+                                            # Add with empty content to maintain conversation flow
+                                            messages_for_completion.append({"role": msg["role"], "content": ""})
+                                            continue
+                                            
+                                        # Handle different content formats safely
+                                        if isinstance(msg["content"], list):
+                                            # Content is a list of objects (e.g., containing text and images)
                                             new_content = []
                                             for c in msg["content"]:
-                                                if c.get("type") != "image_url":
+                                                # Only add non-image content
+                                                if isinstance(c, dict) and c.get("type") != "image_url":
                                                     new_content.append(c)
-                                            messages_for_completion.append({"role": msg["role"], "content": new_content})
+                                                elif not isinstance(c, dict):
+                                                    # If it's not a dict, convert to string and check for image_url
+                                                    c_str = str(c).lower()
+                                                    if "image_url" not in c_str:
+                                                        # Only add if it doesn't contain image_url
+                                                        new_content.append(c)
+                                            # Only add if we have content
+                                            if new_content:
+                                                messages_for_completion.append({"role": msg["role"], "content": new_content})
+                                        else:
+                                            # Content is a simple string or other value
+                                            # Check if it contains image_url before adding
+                                            content_str = str(msg["content"]).lower()
+                                            if "image_url" not in content_str:
+                                                # Only add if it doesn't contain image_url
+                                                messages_for_completion.append({"role": msg["role"], "content": msg["content"]})
                                     
                                     # IMPORTANT: Do not include the image in the final report generation to avoid format errors
                                     # Just use the text prompt without the image, as the model already has all the analysis
@@ -708,18 +925,123 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                             llm_call_start = time.time()
                                             print(f"\033[94m[TIMING] Final report LLM call started at {datetime.datetime.fromtimestamp(llm_call_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
                                             
-                                            final_report_response = await self.client.chat.completions.create(
-                                                model=self.model,
-                                                messages=messages_for_completion,
-                                                temperature=self.temperature,
-                                                max_tokens=4000,  # Allow longer response for detailed report
-                                                stream=False  # No streaming for final report
-                                            )
+                                            # Try to make the API call with potential model fallback
+                                            api_error = None
+                                            model_fallback_attempted = False
+                                            current_model = self.model
+                                            final_report_response = None
+                                            
+                                            # Try the current model first
+                                            try:
+                                                final_report_response = await self.client.chat.completions.create(
+                                                    model=self.model,
+                                                    messages=messages_for_completion,
+                                                    temperature=self.temperature,
+                                                    max_tokens=4000,  # Allow longer response for detailed report
+                                                    stream=False  # No streaming for final report
+                                                )
+                                            except Exception as model_error:
+                                                api_error = model_error
+                                                error_msg = str(model_error)
+                                                print(f"\033[91m[ERROR] Error with model {current_model} for final report: {error_msg}\033[0m")
+                                                
+                                                # Check if this is a provider error that requires retry or fallback
+                                                if "Provider returned error" in error_msg:
+                                                    # First try the same model (Claude 3.7 Sonnet) with increasing wait times
+                                                    claude_model = "anthropic/claude-3.7-sonnet"
+                                                    retry_successful = False
+                                                    
+                                                    # Try Claude with increasing wait times (2s, 5s, 10s)
+                                                    for wait_time in [10, 20, 30]:
+                                                        # Stream the error to client
+                                                        if self.message_handler.on_stream:
+                                                            await self.message_handler.on_stream({
+                                                                "type": "text",
+                                                                "content": f"Retrying with {claude_model} after waiting {wait_time} seconds..."
+                                                            })
+                                                            
+                                                        # Wait before retrying
+                                                        print(f"\033[93m[RETRY] Waiting {wait_time}s before retrying with {claude_model}\033[0m")
+                                                        await asyncio.sleep(wait_time)
+                                                        
+                                                        try:
+                                                            # Try with Claude 3.7 Sonnet
+                                                            final_report_response = await self.client.chat.completions.create(
+                                                                model=claude_model,
+                                                                messages=messages_for_completion,
+                                                                temperature=self.temperature,
+                                                                max_tokens=4000,  # Allow longer response for detailed report
+                                                                stream=False  # No streaming for final report
+                                                            )
+                                                            # If we get here, the retry worked
+                                                            print(f"\033[94m[INFO] Successfully generated report with {claude_model} after waiting {wait_time}s\033[0m")
+                                                            retry_successful = True
+                                                            current_model = claude_model  # Update current model for logging
+                                                            break  # Exit the retry loop
+                                                        except Exception as retry_error:
+                                                            # Log the retry error and continue to the next wait time
+                                                            print(f"\033[91m[ERROR] Retry with {claude_model} after {wait_time}s wait also failed: {str(retry_error)}\033[0m")
+                                                    
+                                                    # If Claude retries failed, try fallback models
+                                                    if not retry_successful:
+                                                        # Try each fallback model in sequence
+                                                        for fallback_model in FALLBACK_MODELS:
+                                                            # Skip the current model if it's in the fallback list
+                                                            if fallback_model == current_model:
+                                                                continue
+                                                                
+                                                            print(f"\033[93m[MODEL FALLBACK] Trying fallback model for final report: {fallback_model}\033[0m")
+                                                            
+                                                            # Notify the user about the model change
+                                                            if self.message_handler.on_stream:
+                                                                await self.message_handler.on_stream({
+                                                                    "type": "text",
+                                                                    "content": f"Trying model for final report: {fallback_model}"
+                                                                })
+                                                            
+                                                            try:
+                                                                # Try with the fallback model
+                                                                final_report_response = await self.client.chat.completions.create(
+                                                                    model=fallback_model,
+                                                                    messages=messages_for_completion,
+                                                                    temperature=self.temperature,
+                                                                    max_tokens=4000,  # Allow longer response for detailed report
+                                                                    stream=False  # No streaming for final report
+                                                                )
+                                                                # If we get here, the fallback worked
+                                                                print(f"\033[94m[INFO] Successfully generated report with fallback model {fallback_model}\033[0m")
+                                                                current_model = fallback_model  # Update current model for logging
+                                                                # Break out of the fallback loop
+                                                                break
+                                                            except Exception as fallback_error:
+                                                                # Log the fallback error and continue to the next model
+                                                                print(f"\033[91m[ERROR] Fallback model {fallback_model} also failed for final report: {str(fallback_error)}\033[0m")
+                                                        
+                                                        # If we still have an error after trying all fallback models, notify the user
+                                                        if api_error:
+                                                            print(f"\033[91m[ERROR] All models failed for final report\033[0m")
+                                                            if self.message_handler.on_stream:
+                                                                await self.message_handler.on_stream({
+                                                                    "type": "error",
+                                                                    "content": "All available models failed for final report. Using partial results."
+                                                                })
+                                                else:
+                                                    # For non-provider errors, just log and continue
+                                                    print(f"\033[91m[ERROR] Error generating final report with model {current_model}: {error_msg}\033[0m")
+                                                    
+                                                    # Stream the error to client
+                                                    if self.message_handler.on_stream:
+                                                        await self.message_handler.on_stream({
+                                                            "type": "text",
+                                                            "content": f"Error generating detailed report with {current_model}. Using partial results."
+                                                        })
+                                                        
+                                                # For final report, we'll continue with partial results rather than raising the error
                                             
                                             # Record end time for LLM call
                                             llm_call_end = time.time()
                                             llm_call_duration = llm_call_end - llm_call_start
-                                            print(f"\033[94m[TIMING] Final report LLM call completed in {llm_call_duration:.2f}s\033[0m")
+                                            print(f"\033[94m[TIMING] Final report LLM call completed in {llm_call_duration:.2f}s with model {current_model}\033[0m")
                                             
                                             # Add to timing metrics
                                             timing_metrics["llm_calls"].append({
@@ -730,17 +1052,32 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                                 "duration": llm_call_duration
                                             })
                                             
-                                            # Extract the final detailed report
-                                            if final_report_response and final_report_response.choices and len(final_report_response.choices) > 0:
-                                                detailed_report = final_report_response.choices[0].message.content
-                                                print(f"\033[94m[INFO] Successfully generated detailed report of {len(detailed_report)} characters\033[0m")
+                                            # Extract the final detailed report with robust error handling
+                                            detailed_report = "[No detailed report could be generated]"
+                                            
+                                            try:
+                                                if final_report_response and hasattr(final_report_response, 'choices') and final_report_response.choices:
+                                                    if len(final_report_response.choices) > 0 and hasattr(final_report_response.choices[0], 'message'):
+                                                        message = final_report_response.choices[0].message
+                                                        if hasattr(message, 'content') and message.content:
+                                                            detailed_report = message.content
+                                                            print(f"\033[94m[INFO] Successfully generated detailed report of {len(detailed_report)} characters\033[0m")
+                                                        else:
+                                                            print(f"\033[93m[WARNING] Message has no content attribute or empty content\033[0m")
+                                                    else:
+                                                        print(f"\033[93m[WARNING] No valid choices in response or message missing\033[0m")
+                                                else:
+                                                    print(f"\033[93m[WARNING] Invalid response format: {final_report_response}\033[0m")
+                                            except Exception as extract_error:
+                                                print(f"\033[91m[ERROR] Error extracting content from response: {str(extract_error)}\033[0m")
+                                                print(f"\033[91m[ERROR] Response structure: {final_report_response}\033[0m")
                                                 
-                                                # Stream the detailed report as text
-                                                if self.message_handler.on_stream:
-                                                    await self.message_handler.on_stream({
-                                                        "type": "text",
-                                                        "content": f"Final compliance report: {detailed_report[:200]}..."
-                                                    })
+                                            # Always stream the report, even if it's the default message
+                                            if self.message_handler.on_stream:
+                                                await self.message_handler.on_stream({
+                                                    "type": "text",
+                                                    "content": f"Final compliance report: {detailed_report[:200]}..."
+                                                })
                                             else:
                                                 print(f"\033[91m[ERROR] Final report response has incomplete structure: {final_report_response}\033[0m")
                                                 last_error = f"Incomplete API response: {final_report_response}"
@@ -777,17 +1114,28 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                         print(f"\033[91m[ERROR] All {max_retries} attempts to generate report failed or returned empty result\033[0m")
                                         
                                         # Try to salvage information from the attempt_completion tool if we have it
-                                        if attempt_completion_summary and isinstance(attempt_completion_summary, dict):
-                                            # Extract any valuable information from the tool call
-                                            compliance_status = attempt_completion_summary.get("compliance_status", "unknown")
-                                            compliance_summary = attempt_completion_summary.get("compliance_summary", "")
-                                            tool_input = attempt_completion_summary.get("tool_input", {})
-                                            
-                                            # Check if the tool_input already contains useful information
-                                            if isinstance(tool_input, dict) and ("compliance_status" in tool_input or "compliance_summary" in tool_input):
+                                        # Extract compliance status and summary using a simplified approach
+                                        compliance_status_input = "unknown"
+                                        compliance_summary_input = "No detailed information available"
+                                        
+                                        # Only try to extract if attempt_completion_summary is a dictionary
+                                        if isinstance(attempt_completion_summary, dict):
+                                            # Extract directly using dictionary access with fallbacks
+                                            if "compliance_status" in attempt_completion_summary:
+                                                compliance_status_input = str(attempt_completion_summary["compliance_status"])
+                                            if "compliance_summary" in attempt_completion_summary:
+                                                compliance_summary_input = str(attempt_completion_summary["compliance_summary"])
+                                                
+                                            # Check if there's a tool_input field with useful information
+                                            if "tool_input" in attempt_completion_summary and isinstance(attempt_completion_summary["tool_input"], dict):
+                                                tool_input = attempt_completion_summary["tool_input"]
                                                 print(f"\033[93m[WARNING] Using compliance data from tool_input as fallback\033[0m")
-                                                compliance_status_input = tool_input.get("compliance_status", compliance_status)
-                                                compliance_summary_input = tool_input.get("compliance_summary", compliance_summary)
+                                                
+                                                # Extract from tool_input if available
+                                                if "compliance_status" in tool_input:
+                                                    compliance_status_input = str(tool_input["compliance_status"])
+                                                if "compliance_summary" in tool_input:
+                                                    compliance_summary_input = str(tool_input["compliance_summary"])
                                                 
                                                 # Construct a reasonable detailed report from the available information
                                                 report_template = "# Brand Compliance Analysis\n\n## Compliance Status: {0}\n\n## Summary\n{1}\n\n*Note: This report was generated using available information from the initial analysis. A full detailed report could not be generated due to technical limitations.*"
@@ -798,23 +1146,53 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                         else:
                                             detailed_report = f"[Error: After {max_retries} attempts, could not generate detailed compliance report. Last error: {str(last_error)}]"                                      
                                     # Combine summary status with detailed report
-                                    # Ensure attempt_completion_summary is not None before accessing its properties
-                                    if attempt_completion_summary is None:
-                                        attempt_completion_summary = {}  # Use empty dict as fallback
-                                        print(f"\033[93m[WARNING] attempt_completion_summary is None, using empty dict fallback\033[0m")
+                                    # Create a simplified final result with string values to avoid type issues
+                                    # Extract compliance status
+                                    compliance_status = "unknown"
+                                    if isinstance(attempt_completion_summary, dict) and "compliance_status" in attempt_completion_summary:
+                                        compliance_status = str(attempt_completion_summary["compliance_status"])
+                                    elif isinstance(attempt_completion_summary, str):
+                                        # Try to extract from string if it contains compliance_status
+                                        if "non-compliant" in attempt_completion_summary.lower() or "non_compliant" in attempt_completion_summary.lower():
+                                            compliance_status = "non_compliant"
+                                        elif "compliant" in attempt_completion_summary.lower():
+                                            compliance_status = "compliant"
                                     
+                                    # Extract summary
+                                    summary = ""
+                                    if isinstance(attempt_completion_summary, dict) and "compliance_summary" in attempt_completion_summary:
+                                        summary = str(attempt_completion_summary["compliance_summary"])
+                                    elif isinstance(attempt_completion_summary, str):
+                                        # Use the first 500 chars as summary if it's a string
+                                        summary = attempt_completion_summary[:500]
+                                    
+                                    # Ensure detailed_report is a string
+                                    if not isinstance(detailed_report, str):
+                                        print(f"\033[93m[WARNING] detailed_report is not a string: {type(detailed_report)}\033[0m")
+                                        detailed_report = str(detailed_report)
+                                    
+                                    # If detailed_report is empty or None, just use a simple message
+                                    if not detailed_report or detailed_report == "[No detailed report could be generated]":
+                                        print(f"\033[94m[INFO] No detailed report was generated, using simple message\033[0m")
+                                        detailed_report = "No detailed compliance report could be generated."
+                                    
+                                    # Create the final result with simple string values
                                     final_result = {
-                                        "compliance_status": attempt_completion_summary.get("compliance_status", "unknown"),
+                                        "compliance_status": compliance_status,
                                         "detailed_report": detailed_report,
-                                        "summary": attempt_completion_summary.get("compliance_summary", "")
+                                        "summary": summary
                                     }
                                     
                                     # Stream the results (both tool and complete events)
                                     if self.message_handler.on_stream:
-                                        # Define a safe task detail that works even if attempt_completion_summary is None
+                                        # Use a simple string for task_detail to avoid any potential issues
                                         task_detail = "Final compliance analysis"
-                                        if attempt_completion_summary is not None:
-                                            task_detail = attempt_completion_summary.get("task_detail", "Final compliance analysis")
+                                        # Only try to extract task_detail if we're sure attempt_completion_summary is a dict
+                                        if isinstance(attempt_completion_summary, dict) and "task_detail" in attempt_completion_summary:
+                                            try:
+                                                task_detail = str(attempt_completion_summary["task_detail"])
+                                            except Exception as e:
+                                                print(f"\033[93m[WARNING] Error extracting task_detail: {str(e)}\033[0m")
                                         
                                         # First ensure we signal this is a tool event
                                         await self.message_handler.on_stream({
@@ -1062,11 +1440,16 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
             print(f"\033[91m[ERROR] Unexpected error in OpenRouterAgent.process: {e}\033[0m")
             traceback.print_exc()
             
-            await self.message_handler.stream_content("An unexpected error occurred. Please try again.")
+            # Notify the user about the error
+            await self.message_handler.stream_content("An unexpected error occurred, but we'll generate a report with available information.")
             
+            # Extract any useful information from the error
+            error_message = str(e)
+            
+            # Return a simple error result
             return {
                 "success": False,
-                "error": f"Unexpected error: {str(e)}",
+                "error": f"Unexpected error: {error_message}",
                 "tool_trace": tool_trace,
                 "model": self.model
             }

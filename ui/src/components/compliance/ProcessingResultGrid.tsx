@@ -251,7 +251,7 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
                     currentItem.steps.map((step, stepIndex) => (
                       <div
                         key={step.id}
-                        className="animate-in fade-in duration-300"
+                        className="animate-in fade-in duration-300 !w-[calc(100%-20px)]"
                         style={{ animationDelay: `${stepIndex * 50}ms` }}
                       >
                         <div className="flex items-start gap-3 relative">
@@ -316,7 +316,7 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
                                   }
                                 } catch { }
                               }
-                              return "text-sm text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300";
+                              return "text-sm text-zinc-200 whitespace-pre-wrap break-words animate-in fade-in duration-300 max-w-[550px]";
                             })()
                           }>
                             {(() => {
