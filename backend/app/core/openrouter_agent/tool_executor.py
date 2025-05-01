@@ -1,9 +1,13 @@
 import json
 import datetime
+import logging
 from typing import Dict, Any, List, Optional
 
 from app.core.openrouter_agent.tool_definitions import execute_tool
 from app.core.openrouter_agent.tool_cache import tool_cache
+from app.core.openrouter_agent.redis import get_cached_image, cache_tool_result
+
+logger = logging.getLogger(__name__)
 
 async def execute_and_process_tool(
     tool_name: str,
@@ -50,8 +54,35 @@ async def execute_and_process_tool(
             tool_result = cached_result
             print(f"\033[92m[CACHE HIT] Using cached result for {tool_name}\033[0m")
         else:
-            # Execute the tool and cache the result
-            tool_result = await execute_tool(tool_name, tool_args)
+            # Check if we have a cached base64 image for this tool call
+            cached_base64 = await get_cached_image(tool_name, tool_args)
+            
+            if cached_base64 is not None:
+                print(f"\033[92m[REDIS CACHE] 👍 IMAGE CACHE HIT for {tool_name} - Using cached base64 image ({len(cached_base64) // 1024}KB)\033[0m")
+                
+                # Execute the tool to get the basic result structure
+                tool_result = await execute_tool(tool_name, tool_args)
+                
+                # If the result is a string (JSON), parse it
+                if isinstance(tool_result, str):
+                    try:
+                        result_dict = json.loads(tool_result)
+                        # Replace the base64 field with our cached version
+                        if isinstance(result_dict, dict) and "base64" in result_dict:
+                            result_dict["base64"] = cached_base64
+                            tool_result = json.dumps(result_dict)
+                            print(f"\033[92m[REDIS CACHE] 🔄 Replaced base64 in result with cached version ({len(cached_base64) // 1024}KB)\033[0m")
+                    except json.JSONDecodeError:
+                        # If we can't parse the result, just use it as is
+                        pass
+            else:
+                # Execute the tool and cache the result
+                tool_result = await execute_tool(tool_name, tool_args)
+                
+                # Cache the base64 image if present in the result
+                await cache_tool_result(tool_name, tool_args, tool_result)
+            
+            # Cache the full tool result
             tool_cache.set(tool_name, tool_args, tool_result)
         
         # Log output sizes

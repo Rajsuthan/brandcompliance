@@ -4,6 +4,7 @@ import asyncio
 import time
 import traceback
 import uuid
+import datetime
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 import re
 
@@ -100,6 +101,21 @@ class OpenRouterAgent:
         video_name: str = None,
         max_tokens: int = None,
     ) -> Dict[str, Any]:
+        # Initialize timing metrics
+        timing_metrics = {
+            "start_time": time.time(),
+            "end_time": None,
+            "total_duration": None,
+            "iterations": [],
+            "llm_calls": [],
+            "tool_executions": [],
+            "final_report_generation": {
+                "start_time": None,
+                "end_time": None,
+                "duration": None,
+                "retries": []
+            }
+        }
         """Process user prompt using OpenRouter's native tool calling.
         
         This method handles the agentic loop, tool execution, and streaming responses.
@@ -120,6 +136,8 @@ class OpenRouterAgent:
         # Store tool calls and results for the final response
         tool_trace = []
         attempt_completion_result = None
+        
+        print(f"\033[94m[TIMING] Process started at {datetime.datetime.fromtimestamp(timing_metrics['start_time']).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
 
         # Track iteration count to enforce completion after max_iterations
         iteration_count = 0
@@ -218,7 +236,9 @@ class OpenRouterAgent:
             while True:
                 # Increment iteration counter
                 iteration_count += 1
+                iteration_start_time = time.time()
                 print(f"\033[94m[LOG] OpenRouterAgent.process: Starting iteration {iteration_count}\033[0m")
+                print(f"\033[94m[TIMING] Iteration {iteration_count} started at {datetime.datetime.fromtimestamp(iteration_start_time).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
                 
                 # Check if we've timed out waiting for a response
                 if time.time() - last_response_time > response_timeout:
@@ -234,6 +254,10 @@ class OpenRouterAgent:
                     }
                 
                 try:
+                    # Record start time for LLM call preparation
+                    llm_prep_start = time.time()
+                    print(f"\033[94m[TIMING] LLM call preparation started at {datetime.datetime.fromtimestamp(llm_prep_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+                    
                     # Check estimated token count
                     token_estimate = self.message_handler.get_message_token_estimate()
                     print(f"\033[94m[INFO] Estimated token count: {token_estimate}\033[0m")
@@ -249,7 +273,7 @@ class OpenRouterAgent:
                         max_msgs = 10  # Standard pruning
                         print(f"\033[93m[WARNING] Token count high ({token_estimate}), pruning messages\033[0m")
                     else:
-                        max_msgs = None  # No pruning needed
+                        max_msgs = 15  # No pruning needed
                     
                     print(f"\033[94m[INFO] max_msgs: {max_msgs}\033[0m")
                     
@@ -289,6 +313,12 @@ class OpenRouterAgent:
                         msg_size = len(str(msg))
                         print(f"\033[96m[MESSAGE {i} of {len(formatted_messages)}] Type: {msg_type}, Size: {msg_size} chars\033[0m")
                     
+                    # Record LLM call start time
+                    llm_call_start = time.time()
+                    llm_prep_duration = llm_call_start - llm_prep_start
+                    print(f"\033[94m[TIMING] LLM call preparation completed in {llm_prep_duration:.2f}s\033[0m")
+                    print(f"\033[94m[TIMING] LLM call started at {datetime.datetime.fromtimestamp(llm_call_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+                    
                     completion = await self.client.chat.completions.create(
                         model=self.model,
                         messages=formatted_messages,
@@ -298,8 +328,37 @@ class OpenRouterAgent:
                         stream=self.stream,
                         timeout=self.timeout
                     )
+                    
+                    # Record LLM call end time
+                    llm_call_end = time.time()
+                    llm_call_duration = llm_call_end - llm_call_start
+                    print(f"\033[94m[TIMING] LLM call completed in {llm_call_duration:.2f}s\033[0m")
+                    
+                    # Add to timing metrics
+                    timing_metrics["llm_calls"].append({
+                        "purpose": "main_iteration",
+                        "iteration": iteration_count,
+                        "start_time": llm_call_start,
+                        "end_time": llm_call_end,
+                        "duration": llm_call_duration,
+                        "preparation_time": llm_prep_duration
+                    })
                     # Update the last response time since we got a response
                     last_response_time = time.time()
+                    
+                    # Record iteration end time and add to metrics
+                    iteration_end_time = time.time()
+                    iteration_duration = iteration_end_time - iteration_start_time
+                    print(f"\033[94m[TIMING] Iteration {iteration_count} completed in {iteration_duration:.2f}s\033[0m")
+                    
+                    # Add iteration timing to metrics
+                    timing_metrics["iterations"].append({
+                        "iteration": iteration_count,
+                        "start_time": iteration_start_time,
+                        "end_time": iteration_end_time,
+                        "duration": iteration_duration,
+                        "tool_calls": [t["tool_name"] for t in timing_metrics["tool_executions"] if t.get("iteration") == iteration_count]
+                    })
                     
                     # Stream handling
                     if self.stream:
@@ -383,6 +442,10 @@ class OpenRouterAgent:
                                             "content": f"Executing tool: {tool_name}..."
                                         })
                                     
+                                    # Record tool execution start time
+                                    tool_start = time.time()
+                                    print(f"\033[94m[TIMING] Tool execution for {tool_name} started at {datetime.datetime.fromtimestamp(tool_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+                                    
                                     # Execute the tool - returns the proper OpenRouter compatible message format
                                     result_format = await execute_and_process_tool(
                                         tool_name, 
@@ -392,6 +455,20 @@ class OpenRouterAgent:
                                         tool_call_id=tool_id,  # Pass the tool_call_id from the API response
                                         on_stream=self.message_handler.on_stream
                                     )
+                                    
+                                    # Record tool execution end time
+                                    tool_end = time.time()
+                                    tool_duration = tool_end - tool_start
+                                    print(f"\033[94m[TIMING] Tool execution for {tool_name} completed in {tool_duration:.2f}s\033[0m")
+                                    
+                                    # Add to timing metrics
+                                    timing_metrics["tool_executions"].append({
+                                        "tool_name": tool_name,
+                                        "iteration": iteration_count,
+                                        "start_time": tool_start,
+                                        "end_time": tool_end,
+                                        "duration": tool_duration
+                                    })
                                     
                                     # Extract the actual tool result from the message format
                                     tool_result = result_format["content"] if isinstance(result_format, dict) and "content" in result_format else str(result_format)
@@ -526,7 +603,11 @@ class OpenRouterAgent:
                                 # STEP 2: Generate detailed compliance report using Claude 3.7 Sonnet without tools
                                 # This avoids the issues with large tool results and provides better formatting
                                 try:
+                                    # Record start time for final report generation
+                                    final_report_start = time.time()
+                                    timing_metrics["final_report_generation"]["start_time"] = final_report_start
                                     print(f"\033[94m[INFO] Generating detailed compliance report...\033[0m")
+                                    print(f"\033[94m[TIMING] Final report generation started at {datetime.datetime.fromtimestamp(final_report_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
                                     
                                     # Import prompt from prompt_manager to ensure we're using the exact same prompt
                                     from app.core.openrouter_agent.prompt_manager import get_system_prompt
@@ -609,15 +690,23 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     
                                     while retry_count < max_retries and detailed_report is None:
                                         try:
-                                            # Remove all images from messages to avoid format errors
-                                  
-                                            print(f"\033[94m[INFO] Retry {retry_count}: Generating final report with {len(messages_for_completion)} messages\033[0m")
+                                            # Record retry start time
+                                            retry_start = time.time()
+                                            print(f"\033[94m[TIMING] Final report retry {retry_count} started at {datetime.datetime.fromtimestamp(retry_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+                                            
+                                            # If we hit image format errors, try to fix common issues
+                                            if retry_count > 0:
+                                                print(f"\033[93m[WARNING] Retry {retry_count}: Removing all images from messages to avoid format errors\033[0m")
                                             
                                             # We already removed images from the final prompt, so no additional action needed here
                                             
                                             # Save the final messages in a file for debugging purposes
                                             with open("final_report_messages.json", "w") as f:
                                                 json.dump(messages_for_completion, f, indent=4)
+                                            
+                                            # Record start time for LLM call
+                                            llm_call_start = time.time()
+                                            print(f"\033[94m[TIMING] Final report LLM call started at {datetime.datetime.fromtimestamp(llm_call_start).strftime('%H:%M:%S.%f')[:-3]}\033[0m")
                                             
                                             final_report_response = await self.client.chat.completions.create(
                                                 model=self.model,
@@ -626,6 +715,20 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                                 max_tokens=4000,  # Allow longer response for detailed report
                                                 stream=False  # No streaming for final report
                                             )
+                                            
+                                            # Record end time for LLM call
+                                            llm_call_end = time.time()
+                                            llm_call_duration = llm_call_end - llm_call_start
+                                            print(f"\033[94m[TIMING] Final report LLM call completed in {llm_call_duration:.2f}s\033[0m")
+                                            
+                                            # Add to timing metrics
+                                            timing_metrics["llm_calls"].append({
+                                                "purpose": "final_report",
+                                                "retry": retry_count,
+                                                "start_time": llm_call_start,
+                                                "end_time": llm_call_end,
+                                                "duration": llm_call_duration
+                                            })
                                             
                                             # Extract the final detailed report
                                             if final_report_response and final_report_response.choices and len(final_report_response.choices) > 0:
@@ -646,7 +749,28 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                             print(f"\033[91m[ERROR] Failed to generate detailed report (attempt {retry_count+1}/{max_retries}): {str(report_error)}\033[0m")
                                             last_error = report_error
                                             retry_count += 1
+                                            # Record retry end time and add to metrics
+                                            retry_end = time.time()
+                                            retry_duration = retry_end - retry_start
+                                            print(f"\033[94m[TIMING] Final report retry {retry_count} failed after {retry_duration:.2f}s\033[0m")
+                                            
+                                            # Add retry timing to metrics
+                                            timing_metrics["final_report_generation"]["retries"].append({
+                                                "retry": retry_count,
+                                                "start_time": retry_start,
+                                                "end_time": retry_end,
+                                                "duration": retry_duration,
+                                                "error": str(report_error)
+                                            })
+                                            
                                             await asyncio.sleep(1)  # Brief pause between retries
+                                    
+                                    # Record end time for final report generation
+                                    final_report_end = time.time()
+                                    final_report_duration = final_report_end - final_report_start
+                                    timing_metrics["final_report_generation"]["end_time"] = final_report_end
+                                    timing_metrics["final_report_generation"]["duration"] = final_report_duration
+                                    print(f"\033[94m[TIMING] Final report generation completed in {final_report_duration:.2f}s\033[0m")
                                     
                                     # If all retries failed, use a fallback
                                     if detailed_report is None or detailed_report.strip() == "":
@@ -717,7 +841,17 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                         "success": True,
                                         "response": final_result,
                                         "tool_trace": tool_trace,
-                                        "iteration_count": iteration_count
+                                        "iteration_count": iteration_count,
+                                        "timing_metrics": {
+                                            "total_duration": timing_metrics["total_duration"],
+                                            "iterations_count": len(timing_metrics["iterations"]),
+                                            "llm_calls_count": len(timing_metrics["llm_calls"]),
+                                            "tool_executions_count": len(timing_metrics["tool_executions"]),
+                                            "avg_iteration_time": sum(iter_data["duration"] for iter_data in timing_metrics["iterations"]) / len(timing_metrics["iterations"]) if timing_metrics["iterations"] else 0,
+                                            "avg_llm_call_time": sum(call_data["duration"] for call_data in timing_metrics["llm_calls"]) / len(timing_metrics["llm_calls"]) if timing_metrics["llm_calls"] else 0,
+                                            "avg_tool_execution_time": sum(tool_data["duration"] for tool_data in timing_metrics["tool_executions"]) / len(timing_metrics["tool_executions"]) if timing_metrics["tool_executions"] else 0,
+                                            "final_report_generation_time": timing_metrics["final_report_generation"]["duration"]
+                                        }
                                     }
                                     
                                 except Exception as e:
@@ -731,12 +865,25 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                             "content": error_msg
                                         })
                                     
-                                    # Return error response
+                                    # Record end time and calculate total duration
+                                    timing_metrics["end_time"] = time.time()
+                                    timing_metrics["total_duration"] = timing_metrics["end_time"] - timing_metrics["start_time"]
+                                    
+                                    # Print timing summary for error case
+                                    print(f"\033[91m[TIMING SUMMARY] Process failed after {timing_metrics['total_duration']:.2f}s\033[0m")
+                                    
+                                    # Return error response with timing metrics
                                     return {
                                         "success": False,
                                         "error": error_msg,
                                         "tool_trace": tool_trace,
-                                        "iteration_count": iteration_count
+                                        "iteration_count": iteration_count,
+                                        "timing_metrics": {
+                                            "total_duration": timing_metrics["total_duration"],
+                                            "iterations_count": len(timing_metrics["iterations"]),
+                                            "llm_calls_count": len(timing_metrics["llm_calls"]),
+                                            "tool_executions_count": len(timing_metrics["tool_executions"])
+                                        }
                                     }
                             
                     # Handle non-streaming case
@@ -811,11 +958,39 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                 if tool_name == "attempt_completion":
                                     attempt_completion_result = tool_result
                                     await self.message_handler.stream_complete(tool_result)
+                                    # Record end time and calculate total duration
+                                    timing_metrics["end_time"] = time.time()
+                                    timing_metrics["total_duration"] = timing_metrics["end_time"] - timing_metrics["start_time"]
+                                    
+                                    # Print timing summary
+                                    print(f"\033[92m[TIMING SUMMARY] Total process duration: {timing_metrics['total_duration']:.2f}s\033[0m")
+                                    print(f"\033[92m[TIMING SUMMARY] Number of iterations: {len(timing_metrics['iterations'])}\033[0m")
+                                    print(f"\033[92m[TIMING SUMMARY] Number of LLM calls: {len(timing_metrics['llm_calls'])}\033[0m")
+                                    print(f"\033[92m[TIMING SUMMARY] Number of tool executions: {len(timing_metrics['tool_executions'])}\033[0m")
+                                    
+                                    # Calculate average times
+                                    avg_iteration = sum(iter_data["duration"] for iter_data in timing_metrics["iterations"]) / len(timing_metrics["iterations"]) if timing_metrics["iterations"] else 0
+                                    avg_llm_call = sum(call_data["duration"] for call_data in timing_metrics["llm_calls"]) / len(timing_metrics["llm_calls"]) if timing_metrics["llm_calls"] else 0
+                                    avg_tool_exec = sum(tool_data["duration"] for tool_data in timing_metrics["tool_executions"]) / len(timing_metrics["tool_executions"]) if timing_metrics["tool_executions"] else 0
+                                    
+                                    print(f"\033[92m[TIMING SUMMARY] Average iteration time: {avg_iteration:.2f}s\033[0m")
+                                    print(f"\033[92m[TIMING SUMMARY] Average LLM call time: {avg_llm_call:.2f}s\033[0m")
+                                    print(f"\033[92m[TIMING SUMMARY] Average tool execution time: {avg_tool_exec:.2f}s\033[0m")
+                                    
                                     return {
                                         "success": True,
                                         "response": tool_result,
                                         "tool_trace": tool_trace,
-                                        "model": self.model
+                                        "model": self.model,
+                                        "timing_metrics": {
+                                            "total_duration": timing_metrics["total_duration"],
+                                            "iterations_count": len(timing_metrics["iterations"]),
+                                            "llm_calls_count": len(timing_metrics["llm_calls"]),
+                                            "tool_executions_count": len(timing_metrics["tool_executions"]),
+                                            "avg_iteration_time": avg_iteration,
+                                            "avg_llm_call_time": avg_llm_call,
+                                            "avg_tool_execution_time": avg_tool_exec
+                                        }
                                     }
                 except Exception as e:
                     error_msg = str(e)
