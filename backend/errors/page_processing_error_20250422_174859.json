@@ -1,7 +1,0 @@
-{
-  "timestamp": "2025-04-22T17:48:59.479661",
-  "page_id": "pdf_task_6807d68b3bcf4455123eb90f_1745344139",
-  "guideline_id": "6807d68b3bcf4455123eb90f",
-  "error": "'base64'",
-  "traceback": "Traceback (most recent call last):\n  File \"/Users/shanjairaj/Documents/projects/compliance-proj/backend/app/utils/background_tasks.py\", line 62, in process_guideline_page\n    \"image_url\": {\"url\": page_data[\"base64\"]},\n                         ~~~~~~~~~^^^^^^^^^^\nKeyError: 'base64'\n"
-}
