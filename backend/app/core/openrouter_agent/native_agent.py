@@ -32,7 +32,7 @@ OPENROUTER_TIMEOUT = 120  # 2 minutes timeout for OpenRouter API calls
 FALLBACK_MODELS = [
     "openai/gpt-4o",
     "openai/o3-mini",
-    # "google/gemini-2.5-pro-preview-03-25",
+    "google/gemini-2.5-pro-preview-03-25",
     "cohere/command-r-08-2024",
     "openai/gpt-4o"
 ]
