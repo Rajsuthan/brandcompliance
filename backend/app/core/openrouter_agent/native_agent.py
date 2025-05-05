@@ -596,10 +596,11 @@ class OpenRouterAgent:
                                     
                                     # First, stream that we're executing the tool (better UX)
                                     if self.message_handler.on_stream:
-                                        await self.message_handler.on_stream({
-                                            "type": "text",
-                                            "content": f"Executing tool: {tool_name}..."
-                                        })
+                                        # await self.message_handler.on_stream({
+                                        #     "type": "text",
+                                        #     "content": f"Executing tool: {tool_name}..."
+                                        # })
+                                        print('tool name', tool_name)
                                     
                                     # Record tool execution start time
                                     tool_start = time.time()
