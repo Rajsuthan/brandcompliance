@@ -16,7 +16,10 @@ from app.api import auth, items, brand_guidelines, compliance, video_upload
 
 # Import Redis startup module
 try:
-    from app.core.openrouter_agent.redis.startup import setup_redis_cache
+    from app.core.openrouter_agent.redis.startup import (
+        initialize_redis_cache,
+        cleanup_redis_cache,
+    )
     redis_available = True
 except ImportError:
     logger.warning("Redis module not available. Continuing without Redis caching.")
@@ -36,7 +39,7 @@ async def startup_event():
     if redis_available:
         try:
             logger.info("Initializing Redis cache...")
-            success = setup_redis_cache()
+            success = await initialize_redis_cache()
             if success:
                 logger.info("Redis cache initialized successfully")
             else:
@@ -53,9 +56,8 @@ async def shutdown_event():
     # Clean up Redis connections if available
     if redis_available:
         try:
-            from app.core.openrouter_agent.redis.startup import shutdown_redis_cache
             logger.info("Closing Redis connections...")
-            success = shutdown_redis_cache()
+            success = await cleanup_redis_cache()
             if success:
                 logger.info("Redis connections closed successfully")
             else:

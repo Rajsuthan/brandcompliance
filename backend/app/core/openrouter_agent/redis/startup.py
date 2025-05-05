@@ -44,8 +44,13 @@ def setup_redis_cache():
     """
     Setup Redis cache during application startup.
     This function is synchronous and can be called from FastAPI startup event.
+    If the event loop is already running, this function will log an error and return False.
     """
     loop = asyncio.get_event_loop()
+    if loop.is_running():
+        logger.error("Cannot call setup_redis_cache: event loop is already running. "
+                     "Use 'await initialize_redis_cache()' in async contexts.")
+        return False
     try:
         success = loop.run_until_complete(initialize_redis_cache())
         return success
@@ -75,8 +80,13 @@ def shutdown_redis_cache():
     """
     Shutdown Redis cache during application shutdown.
     This function is synchronous and can be called from FastAPI shutdown event.
+    If the event loop is already running, this function will log an error and return False.
     """
     loop = asyncio.get_event_loop()
+    if loop.is_running():
+        logger.error("Cannot call shutdown_redis_cache: event loop is already running. "
+                     "Use 'await cleanup_redis_cache()' in async contexts.")
+        return False
     try:
         success = loop.run_until_complete(cleanup_redis_cache())
         return success

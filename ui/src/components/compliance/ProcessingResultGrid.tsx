@@ -502,13 +502,31 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
 
       console.log(parsed)
 
+      if (parsed && parsed.tool_result && parsed.tool_result.detailed_report && typeof parsed.tool_result.detailed_report === "string") {
+        console.log("Found tool_result.detailed_report")
+        const result = parsed.tool_result.detailed_report;
+        const regex = /<result>(.*?)<\/result>/s;
+        const match = result.match(regex);
+        if (match) {
+          console.log("Found result inside tool_result.detailed_report")
+          return (
+            <ReactMarkdown components={MarkdownComponents}>
+              {match[1]}
+            </ReactMarkdown>
+          );
+        }
+      }
+
       // Check if it has a results object with multiple keys
       if (parsed && parsed.results && typeof parsed.results === "object") {
         const resultsObj = parsed.results;
         const keys = Object.keys(resultsObj);
 
+        console.log("Found results object with multiple keys")
+
         // If it has multiple keys, render each section
         if (keys.length > 0) {
+          console.log("Found multiple keys in results object")
           return (
             <div className="space-y-6">
               {keys.map((key) => (
@@ -528,6 +546,7 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
 
       // If it has a 'result' property as a string (single result)
       if (parsed && parsed.result && typeof parsed.result === "string") {
+        console.log("Found result property as string")
         return (
           <ReactMarkdown components={MarkdownComponents}>
             {parsed.result}
@@ -538,6 +557,7 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
 
       // If it has a 'result' property as a string (single result)
       if (parsed && parsed.recommendation && typeof parsed.recommendation === "string") {
+        console.log("Found recommendation property as string")
         return (
           <ReactMarkdown components={MarkdownComponents}>
             {parsed.recommendation}
@@ -545,9 +565,54 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
         );
       }
 
+      // hadnle where the detailed report string can be like this:
+      //       "I'll provide a comprehensive final analysis of the Burger King TikTok video based on my review of the brand guidelines and the video frames provided.
+
+      // ```xml
+      // <attempt_completion>
+      // <result>
+      // </result>
+      // </attempt_completion>
+      // ```
+
+      if (parsed && parsed.detailed_report && typeof parsed.detailed_report === "string") {
+        const regex1 = /<attempt_completion>\s*<result>(.*?)<\/result>\s*<\/attempt_completion>/s;
+        const match1 = parsed.detailed_report.match(regex1);
+        if (match1) {
+          console.log("Found result inside attempt_completion")
+          return (
+            <ReactMarkdown components={MarkdownComponents}>
+              {match1[1]}
+            </ReactMarkdown>
+          );
+        }
+      }
+
+
+
+      // If it has a 'result' property as a string (single result)
+      //  check if the detailed_report property has xml tags in it
+      // if yes, then extract the value inside of the <result> xxx <result> xml tags
+      // this should be the final result
+      if (parsed && parsed.tool_result && parsed.tool_result.detailed_report && typeof parsed.tool_result.detailed_report === "string") {
+        const result = parsed.tool_result.detailed_report;
+        const regex = /<result>(.*?)<\/result>/s;
+        const match = result.match(regex);
+        if (match) {
+          console.log("Found result inside tool_result.detailed_report")
+          return (
+            <ReactMarkdown components={MarkdownComponents}>
+              {match[1]}
+            </ReactMarkdown>
+          );
+        }
+      }
+
       // If it has a 'result' property as a string (single result)
       if (parsed && parsed.tool_result && parsed.tool_result.detailed_report && typeof parsed.tool_result.detailed_report === "string") {
-        return (
+        console.log("Found tool_result.detailed_report")
+        // run the regex check here
+          return (
           <ReactMarkdown components={MarkdownComponents}>
             {parsed.tool_result.detailed_report}
           </ReactMarkdown>
@@ -557,6 +622,7 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
 
       // If it has a 'result' property as a string (single result)
       if (parsed && parsed.detailed_report && typeof parsed.detailed_report === "string") {
+        console.log("Found detailed_report")
         return (
           <ReactMarkdown components={MarkdownComponents}>
             {parsed.detailed_report}

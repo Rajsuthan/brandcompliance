@@ -25,6 +25,7 @@ from app.core.openrouter_agent.message_handler import MessageHandler
 from app.core.openrouter_agent.stream_processor import process_completion_chunks
 from app.core.openrouter_agent.tool_executor import execute_and_process_tool
 from app.core.openrouter_agent.media_handler import inject_image_data
+from app.core.openrouter_agent.stream_processor import stream_tool_execution
 
 # Constants for timeout settings
 OPENROUTER_TIMEOUT = 120  # 2 minutes timeout for OpenRouter API calls
@@ -864,54 +865,46 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     # Important: Add ALL previous messages including system messages and ALL tool results
                                     # This ensures the model has access to the complete conversation history
                                     for msg in previous_messages:
-                                        # check if a msg content is a list 
-                                        # if its a list, then see if there is a object with the type of 'image_url'
-                                        # if then, remove that object
+                                        # Skip messages that don't have required fields
+                                        if not isinstance(msg, dict) or "role" not in msg:
+                                            print(f"\033[93m[WARNING] Skipping message without role: {msg}\033[0m")
+                                            continue
+                                            
+                                        # Skip system messages
+                                        if msg["role"] == "system":
+                                            continue
+                                            
+                                        # Handle case where content is missing
+                                        if "content" not in msg:
+                                            print(f"\033[93m[WARNING] Message has no content field: {msg}\033[0m")
+                                            # Add with empty content to maintain conversation flow
+                                            messages_for_completion.append({"role": msg["role"], "content": ""})
+                                            continue
+                                            
+                                        # Handle different content formats safely
                                         if isinstance(msg["content"], list):
+                                            # Content is a list of objects (e.g., containing text and images)
+                                            new_content = []
                                             for c in msg["content"]:
-                                                if c.get("type") == "image_url":
-                                                    msg["content"].remove(c)
-                                        messages_for_completion.append(msg)
-                                        # # Skip messages that don't have required fields
-                                        # if not isinstance(msg, dict) or "role" not in msg:
-                                        #     print(f"\033[93m[WARNING] Skipping message without role: {msg}\033[0m")
-                                        #     continue
-                                   
-                                        # # Skip system messages
-                                        # if msg["role"] == "system":
-                                        #     continue
-                                            
-                                        # # Handle case where content is missing
-                                        # if "content" not in msg:
-                                        #     print(f"\033[93m[WARNING] Message has no content field: {msg}\033[0m")
-                                        #     # Add with empty content to maintain conversation flow
-                                        #     messages_for_completion.append({"role": msg["role"], "content": ""})
-                                        #     continue
-                                            
-                                        # # Handle different content formats safely
-                                        # if isinstance(msg["content"], list):
-                                        #     # Content is a list of objects (e.g., containing text and images)
-                                        #     new_content = []
-                                        #     for c in msg["content"]:
-                                        #         # Only add non-image content
-                                        #         if isinstance(c, dict) and c.get("type") != "image_url":
-                                        #             new_content.append(c)
-                                        #         elif not isinstance(c, dict):
-                                        #             # If it's not a dict, convert to string and check for image_url
-                                        #             c_str = str(c).lower()
-                                        #             if "image_url" not in c_str:
-                                        #                 # Only add if it doesn't contain image_url
-                                        #                 new_content.append(c)
-                                        #     # Only add if we have content
-                                        #     if new_content:
-                                        #         messages_for_completion.append({"role": msg["role"], "content": new_content})
-                                        # else:
-                                        #     # Content is a simple string or other value
-                                        #     # Check if it contains image_url before adding
-                                        #     content_str = str(msg["content"]).lower()
-                                        #     if "image_url" not in content_str:
-                                        #         # Only add if it doesn't contain image_url
-                                        #         messages_for_completion.append({"role": msg["role"], "content": msg["content"]})
+                                                # Only add non-image content
+                                                if isinstance(c, dict) and c.get("type") != "image_url":
+                                                    new_content.append(c)
+                                                elif not isinstance(c, dict):
+                                                    # If it's not a dict, convert to string and check for image_url
+                                                    c_str = str(c).lower()
+                                                    if "image_url" not in c_str:
+                                                        # Only add if it doesn't contain image_url
+                                                        new_content.append(c)
+                                            # Only add if we have content
+                                            if new_content:
+                                                messages_for_completion.append({"role": msg["role"], "content": new_content})
+                                        else:
+                                            # Content is a simple string or other value
+                                            # Check if it contains image_url before adding
+                                            content_str = str(msg["content"]).lower()
+                                            if "image_url" not in content_str:
+                                                # Only add if it doesn't contain image_url
+                                                messages_for_completion.append({"role": msg["role"], "content": msg["content"]})
                                     
                                     # IMPORTANT: Do not include the image in the final report generation to avoid format errors
                                     # Just use the text prompt without the image, as the model already has all the analysis
@@ -1471,27 +1464,8 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                     else:
                                         tool_args["image_base64"] = image_base64
                                 
-                                # If executing a video tool and tool_args has a timestamp, attach the corresponding frame's base64
-                                video_tools = {
-                                    "get_video_color_scheme",
-                                    "get_video_fonts",
-                                    "check_video_frame_specs",
-                                    "extract_verbal_content",
-                                    "get_region_color_scheme",
-                                    "check_color_contrast",
-                                    "check_element_placement",
-                                    "check_image_clarity",
-                                    "check_text_grammar",
-                                }
-                                if tool_name in video_tools and "timestamp" in tool_args and frames:
-                                    # Find the frame with the closest timestamp
-                                    target_ts = tool_args["timestamp"]
-                                    closest_frame = min(frames, key=lambda f: abs(f.get("timestamp", 0) - target_ts))
-                                    frame_base64 = closest_frame.get("image_data")
-                                    if frame_base64:
-                                        tool_args["image_base64"] = frame_base64
-
                                 # Execute the tool and stream its result
+                                
                                 try:
                                     print(f"\033[92m[TOOL EXEC] Executing {tool_name}...\033[0m")
                                     tool_result = await stream_tool_execution(
@@ -1575,9 +1549,10 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                     # Check if we've reached max retries
                     if retry_count <= 0:
                         await self.message_handler.stream_content("Failed to get a response from the model. Please try again.")
+                        last_error_message = error_msg if 'error_msg' in locals() else "Unknown error"
                         return {
                             "success": False,
-                            "error": f"Failed to get a response after multiple retries: {str(e)}",
+                            "error": f"Failed to get a response after multiple retries: {last_error_message}",
                             "tool_trace": tool_trace,
                             "model": self.model
                         }
@@ -1586,9 +1561,10 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                 # Check if we've reached max retries
                 if retry_count <= 0:
                     await self.message_handler.stream_content("Failed to get a response from the model. Please try again.")
+                    last_error_message = error_msg if 'error_msg' in locals() else "Unknown error"
                     return {
                         "success": False,
-                        "error": f"Failed to get a response after multiple retries: {str(e)}",
+                        "error": f"Failed to get a response after multiple retries: {last_error_message}",
                         "tool_trace": tool_trace,
                         "model": self.model
                     }

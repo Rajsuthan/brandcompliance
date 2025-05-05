@@ -179,7 +179,7 @@ async def process_image_and_stream(
     # Note: The OpenRouterNativeAgent uses OPENROUTER_TIMEOUT internally, so we don't pass timeout here
     agent = OpenRouterNativeAgent(
         api_key=OPENROUTER_API_KEY,  # Required parameter
-        model="anthropic/claude-3-7-sonnet",  # Using Claude 3.7 Sonnet for improved compliance analysis
+        model="anthropic/claude-3.7-sonnet",  # Using Claude 3.7 Sonnet for improved compliance analysis
         on_stream=on_stream,
         system_prompt=custom_system_prompt,
         temperature=0.1  # Lower temperature for more consistent outputs

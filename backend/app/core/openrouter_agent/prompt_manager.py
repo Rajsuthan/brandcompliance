@@ -476,10 +476,13 @@ def get_iteration_milestone_prompt(model_name: str, iteration_count: int) -> str
         )
     elif model_type == "claude_3_5":
         # Claude 3.5 Sonnet works well with clear, direct instructions and structured format
+        # SAY THAT THIS IS JUST A REMINDER, AND IT CAN CONTINUEN ON THE PROCESS IF ITS REQUIRES MORE ANALYSIS
+        # DO IT
+
         return (
             f"### ITERATION MILESTONE: {iteration_count}\n\n"
-            f"You have reached {iteration_count} iterations in this compliance analysis process.\n\n"
-            f"**DECISION POINT:**\n\n"
+            f"This is a reminder that you have reached {iteration_count} iterations in this compliance analysis process.\n\n"
+            f"**CONTINUE OR CONCLUDE:**\n\n"
             f"* If you have sufficient information: Use the attempt_completion tool to provide your final analysis\n"
             f"* If you need more data: Continue with specific tool calls to gather additional information\n\n"
             f"**COMPLIANCE CHECKLIST:**\n\n"
@@ -488,9 +491,7 @@ def get_iteration_milestone_prompt(model_name: str, iteration_count: int) -> str
             f"- Brand consistency across all elements\n"
             f"- For videos: key frames, transitions, audio elements\n\n"
             f"**REMINDER FOR FINAL SUBMISSION:**\n"
-            f"```xml\n"
-            f"<attempt_completion>\n"
-            f"<result>\n"
+
             f"## Compliance Analysis for [Content Type]\n\n"
             f"### Executive Summary\n"
             f"After thorough analysis against brand guidelines, this content demonstrates [✅ Compliance / ❌ Non-Compliance / ⚠️ Unclear] with key brand standards. [Brief summary of key findings]\n\n"
@@ -500,25 +501,25 @@ def get_iteration_milestone_prompt(model_name: str, iteration_count: int) -> str
             f"[Provide comprehensive analysis of all elements]\n\n"
             f"### Recommendations\n"
             f"[Provide specific recommendations for any compliance issues]\n"
-            f"</result>\n"
-            f"<tool_name>attempt_completion</tool_name>\n"
-            f"<task_detail>Final Compliance Analysis</task_detail>\n"
-            f"</attempt_completion>\n"
-            f"```\n\n"
+    
             f"Please decide whether to conclude your analysis or continue with specific additional investigations."
         )
     elif model_type == "claude_3_7":
         # Claude 3.7 Sonnet works best with concise, clear instructions
+        
         return (
             f"### ITERATION MILESTONE: {iteration_count}\n\n"
-            f"You've reached {iteration_count} iterations. Please decide:\n\n"
-            f"1. Use attempt_completion tool now to provide your final analysis, or\n"
-            f"2. Continue with specific tool calls if you need more information\n\n"
-            f"Have you thoroughly examined all visual elements, brand consistency, and compliance aspects?\n\n"
-            f"Final submission format:\n"
-            f"```xml\n"
-            f"<attempt_completion>\n"
-            f"<result>\n"
+            f"This is a reminder that you have reached {iteration_count} iterations in this compliance analysis process.\n\n"
+            f"**CONTINUE OR CONCLUDE:**\n\n"
+            f"* If you have sufficient information: Use the attempt_completion tool to provide your final analysis\n"
+            f"* If you need more data: Continue with specific tool calls to gather additional information\n\n"
+            f"**COMPLIANCE CHECKLIST:**\n\n"
+            f"Have you thoroughly examined these aspects?\n"
+            f"- Visual elements: colors, typography, layout, imagery, logo usage\n"
+            f"- Brand consistency across all elements\n"
+            f"- For videos: key frames, transitions, audio elements\n\n"
+            f"**REMINDER FOR FINAL SUBMISSION:**\n"
+
             f"## Compliance Analysis for [Content Type]\n\n"
             f"### Executive Summary\n"
             f"After thorough analysis against brand guidelines, this content demonstrates [✅ Compliance / ❌ Non-Compliance / ⚠️ Unclear] with key brand standards. [Brief summary of key findings]\n\n"
@@ -528,24 +529,25 @@ def get_iteration_milestone_prompt(model_name: str, iteration_count: int) -> str
             f"[Provide comprehensive analysis of all elements]\n\n"
             f"### Recommendations\n"
             f"[Provide specific recommendations for any compliance issues]\n"
-            f"</result>\n"
-            f"<tool_name>attempt_completion</tool_name>\n"
-            f"<task_detail>Final Compliance Analysis</task_detail>\n"
-            f"</attempt_completion>\n"
-            f"```"
+    
+            f"Please decide whether to conclude your analysis or continue with specific additional investigations."
         )
     else:
         # Default format for other models
+        
         return (
             f"### ITERATION MILESTONE: {iteration_count}\n\n"
-            f"You have reached {iteration_count} iterations in this compliance analysis process.\n\n"
-            f"**DECISION POINT:**\n\n"
-            f"* **IF READY TO CONCLUDE**: Use the attempt_completion tool now to provide your final analysis\n"
-            f"* **IF MORE ANALYSIS NEEDED**: Continue with specific tool calls to gather additional information\n\n"
+            f"This is a reminder that you have reached {iteration_count} iterations in this compliance analysis process.\n\n"
+            f"**CONTINUE OR CONCLUDE:**\n\n"
+            f"* If you have sufficient information: Use the attempt_completion tool to provide your final analysis\n"
+            f"* If you need more data: Continue with specific tool calls to gather additional information\n\n"
+            f"**COMPLIANCE CHECKLIST:**\n\n"
+            f"Have you thoroughly examined these aspects?\n"
+            f"- Visual elements: colors, typography, layout, imagery, logo usage\n"
+            f"- Brand consistency across all elements\n"
+            f"- For videos: key frames, transitions, audio elements\n\n"
             f"**REMINDER FOR FINAL SUBMISSION:**\n"
-            f"```xml\n"
-            f"<attempt_completion>\n"
-            f"<result>\n"
+
             f"## Compliance Analysis for [Content Type]\n\n"
             f"### Executive Summary\n"
             f"After thorough analysis against brand guidelines, this content demonstrates [✅ Compliance / ❌ Non-Compliance / ⚠️ Unclear] with key brand standards. [Brief summary of key findings]\n\n"
@@ -555,11 +557,7 @@ def get_iteration_milestone_prompt(model_name: str, iteration_count: int) -> str
             f"[Provide comprehensive analysis of all elements]\n\n"
             f"### Recommendations\n"
             f"[Provide specific recommendations for any compliance issues]\n"
-            f"</result>\n"
-            f"<tool_name>attempt_completion</tool_name>\n"
-            f"<task_detail>Final Compliance Analysis</task_detail>\n"
-            f"</attempt_completion>\n"
-            f"```\n\n"
+    
             f"Please decide whether to conclude your analysis or continue with specific additional investigations."
         )
 
@@ -909,8 +907,7 @@ Here's a detailed example of how to analyze a video for brand compliance with ex
    - Result: Frame specifications comply with required aspect ratio and resolution
 
 7. **Detailed Verdict Formulation**:
-   - <attempt_completion>
-     <result>
+
      ## Compliance Analysis for Video: "Nike Product Launch"
 
      ### Executive Summary
@@ -930,10 +927,7 @@ Here's a detailed example of how to analyze a video for brand compliance with ex
      3. Replace all typography with Nike TG font family
      4. Replace blurred logo with high-resolution version
      5. Correct grammatical errors in all text elements
-     </result>
-     <tool_name>attempt_completion</tool_name>
-     <task_detail>Finalize Nike Video Compliance Analysis</task_detail>
-   </attempt_completion>
+
 
 This workflow demonstrates the extreme attention to detail required: checking exact color codes (not just "red"), precise spacing measurements, multiple timestamps throughout the video, and cross-referencing findings with specific guideline pages and requirements.
 
