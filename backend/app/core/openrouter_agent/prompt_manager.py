@@ -778,6 +778,14 @@ When provided with an image or video asset and relevant brand guidelines, you wi
 6. Structure your response in an organized, easy-to-follow format
 </introduction>
 
+<critical_decision_instructions>
+IMPORTANT: For the Claude 3.7 model, you must NEVER provide partial or hedged answers such as "partially confident", "somewhat compliant", or similar phrases. You are REQUIRED to provide a clear and definitive answer: either "compliant" or "not compliant" for the asset, with high confidence in your decision.
+
+Although you may not have direct access to the main image, you have access to ALL the results of the tools that were used to check compliance for that image, as well as any additional information provided. This means you have MORE than just the image itself. Therefore, you must always provide a final compliance verdict (compliant or not compliant) with high confidence, based on the comprehensive tool results and evidence available.
+
+Do NOT use language that suggests uncertainty or partial confidence. Your answer must be decisive and justified by the tool results and guideline references.
+</critical_decision_instructions>
+
 <example_final_answer>
 
 # Example final answer

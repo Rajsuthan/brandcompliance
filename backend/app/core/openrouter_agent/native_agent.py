@@ -914,9 +914,48 @@ The report MUST be extremely detailed, professionally formatted, and actionable.
                                         #         # Only add if it doesn't contain image_url
                                         #         messages_for_completion.append({"role": msg["role"], "content": msg["content"]})
                                     
-                                    # IMPORTANT: Do not include the image in the final report generation to avoid format errors
-                                    # Just use the text prompt without the image, as the model already has all the analysis
-                                    # from previous steps and tool calls
+                                    # Insert images for final answer generation (after removing all previous images)
+                                    # IMAGE COMPLIANCE: Add image_base64 as image_url message
+                                    # infer the type of image (jpeg or png) from the image64 being sent
+                                    # image_type = "jpeg" if "jpeg" in image_base64.lower() else "png"
+
+                                    # if image_base64:
+                                    #     image_size_kb = len(image_base64) / 1024
+                                    #     detail_level = "high" if image_size_kb < 1000 else "low"
+                                    #     messages_for_completion.append({
+                                    #         "role": "user",
+                                    #         "content": [
+                                    #             {
+                                    #                 "type": "image_url",
+                                    #                 "image_url": {
+                                    #                     "url": f"data:image/{image_type};base64,{image_base64}",
+                                    #                     "detail": detail_level
+                                    #                 }
+                                    #             }
+                                    #         ]
+                                    #     })
+                                    # # VIDEO COMPLIANCE: Add all frames' image_data as image_url messages
+                                    # elif frames:
+                                    #     for i, frame in enumerate(frames):
+                                    #         image_data = frame.get("image_data")
+                                    #         if not image_data:
+                                    #             print(f"[WARNING] Frame {i} missing image_data, skipping for final answer images.")
+                                    #             continue
+                                    #         image_size_kb = len(image_data) / 1024
+                                    #         detail_level = "high" if image_size_kb < 500 else "low"
+                                    #         messages_for_completion.append({
+                                    #             "role": "user",
+                                    #             "content": [
+                                    #                 {
+                                    #                     "type": "image_url",
+                                    #                     "image_url": {
+                                    #                         "url": f"data:image/{image_type};base64,{image_data}",
+                                    #                         "detail": detail_level
+                                    #                     }
+                                    #                 }
+                                    #             ]
+                                    #         })
+
                                     print(f"\033[94m[INFO] Using text-only prompt for final report generation to avoid image format errors\033[0m")
                                     final_user_prompt = final_user_prompt_text
                                     
