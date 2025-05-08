@@ -43,7 +43,7 @@ FALLBACK_MODELS = [
 class OpenRouterAgent:
     def __init__(
         self,
-        api_key: str = "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",
+        api_key: str = os.getenv("OPENROUTER_API_KEY"),
         model: str = "anthropic/claude-3.7-sonnet",
         on_stream: Optional[Callable] = None,
         temperature: float = 0.2,

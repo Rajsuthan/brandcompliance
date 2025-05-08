@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 async def evaluate_test_case(
     test_case: Dict[str, Any],
     model: str = "anthropic/claude-3.7-sonnet",
-    api_key: str = "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"
+    api_key: str = os.getenv("OPENROUTER_API_KEY")
 ) -> Dict[str, Any]:
     """
     Evaluate a single test case by comparing the actual results with the expected results.
@@ -145,7 +145,7 @@ Your response should be ONLY the JSON object, nothing else.
 async def call_llm_for_evaluation(
     prompt: str,
     model: str = "anthropic/claude-3.7-sonnet",
-    api_key: str = "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"
+    api_key: str = os.getenv("OPENROUTER_API_KEY")
 ) -> str:
     """
     Call the LLM to evaluate the results.
@@ -273,7 +273,7 @@ def parse_evaluation_response(response: str) -> Dict[str, Any]:
 async def evaluate_benchmark_results(
     benchmark_results: List[Dict[str, Any]],
     model: str = "anthropic/claude-3.7-sonnet",
-    api_key: str = "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",
+    api_key: str = os.getenv("OPENROUTER_API_KEY"),
     max_concurrent: int = 1
 ) -> List[Dict[str, Any]]:
     """
@@ -309,7 +309,7 @@ async def evaluate_test_case_with_semaphore(
     test_case: Dict[str, Any],
     semaphore: asyncio.Semaphore,
     model: str = "anthropic/claude-3.7-sonnet",
-    api_key: str = "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"
+    api_key: str = os.getenv("OPENROUTER_API_KEY")
 ) -> Dict[str, Any]:
     """
     Evaluate a single test case with a semaphore to limit concurrency.

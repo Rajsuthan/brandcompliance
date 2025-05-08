@@ -107,7 +107,7 @@ def safe_json_loads(content):
         }
 
 # OpenRouter API key
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Gemini model via OpenRouter
 GEMINI_MODEL = "anthropic/claude-3.7-sonnet"

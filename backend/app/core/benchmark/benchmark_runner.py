@@ -98,7 +98,7 @@ async def process_video(video_path: str, initial_interval: float = 1.0, similari
 async def run_test_case(
     test_case: Dict[str, Any],
     model: Optional[str] = None,
-    api_key: str = "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"
+    api_key: str = os.getenv("OPENROUTER_API_KEY")
 ) -> Dict[str, Any]:
     """
     Run a single test case.
@@ -222,7 +222,7 @@ def generate_prompt(test_case: Dict[str, Any]) -> str:
 async def run_benchmark(
     test_cases: List[Dict[str, Any]],
     model: Optional[str] = None,
-    api_key: str = "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",
+    api_key: str = os.getenv("OPENROUTER_API_KEY"),
     max_concurrent: int = 1,
     output_file: Optional[str] = None,
     evaluate: bool = True,

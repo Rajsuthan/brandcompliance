@@ -46,7 +46,6 @@ async def main(args):
         benchmark_results = await run_benchmark(
             test_cases,
             model=args.model,
-            api_key=args.api_key,
             max_concurrent=args.concurrent,
             output_file=args.output,
             evaluate=not args.no_evaluate,
@@ -142,11 +141,7 @@ def parse_args():
 
     parser.add_argument("--model", default="anthropic/claude-3.7-sonnet",
                         help="Model to use for compliance checking")
-
-    parser.add_argument("--api-key",
-                        default="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",
-                        help="API key for the LLM service (default: hardcoded OpenRouter API key)")
-
+                        
     parser.add_argument("--concurrent", type=int, default=1,
                         help="Maximum number of concurrent test cases to run")
 
