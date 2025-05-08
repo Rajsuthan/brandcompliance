@@ -22,7 +22,7 @@ class ProgressTracker:
         self.uploaded = 0
         self.lock = threading.Lock()
         self.start_time = time.time()
-    
+
     def update(self, chunk_size):
         with self.lock:
             self.uploaded += chunk_size
@@ -42,26 +42,26 @@ async def upload_large_file(file, bucket, key, content_type):
     file.seek(0, 2)  # Seek to end
     file_size = file.tell()
     file.seek(0)  # Reset to beginning
-    
+
     # Initialize multipart upload
     mpu = s3_client.create_multipart_upload(
         Bucket=bucket,
         Key=key,
         ContentType=content_type
     )
-    
+
     # 5MB chunks - AWS minimum chunk size
     chunk_size = 5 * 1024 * 1024
     total_chunks = (file_size + chunk_size - 1) // chunk_size
-    
+
     # Create progress tracker
     progress = ProgressTracker(file_size)
-    
+
     # Upload parts in parallel
     loop = asyncio.get_event_loop()
     executor = ThreadPoolExecutor(max_workers=min(10, total_chunks))
     upload_tasks = []
-    
+
     for i in range(total_chunks):
         start_pos = i * chunk_size
         end_pos = min(start_pos + chunk_size, file_size)
@@ -72,10 +72,10 @@ async def upload_large_file(file, bucket, key, content_type):
                 file, bucket, key, mpu['UploadId'], i+1, start_pos, end_pos, progress
             )
         )
-    
+
     # Wait for all uploads to complete
     parts = await asyncio.gather(*upload_tasks)
-    
+
     # Complete the multipart upload
     s3_client.complete_multipart_upload(
         Bucket=bucket,
@@ -83,7 +83,7 @@ async def upload_large_file(file, bucket, key, content_type):
         UploadId=mpu['UploadId'],
         MultipartUpload={'Parts': sorted(parts, key=lambda x: x['PartNumber'])}
     )
-    
+
     return key
 
 def upload_part(file, bucket, key, upload_id, part_number, start_pos, end_pos, progress):
@@ -91,7 +91,7 @@ def upload_part(file, bucket, key, upload_id, part_number, start_pos, end_pos, p
     # Create a file-like object for the chunk
     file.seek(start_pos)
     chunk = file.read(end_pos - start_pos)
-    
+
     # Upload the part
     response = s3_client.upload_part(
         Bucket=bucket,
@@ -100,10 +100,10 @@ def upload_part(file, bucket, key, upload_id, part_number, start_pos, end_pos, p
         PartNumber=part_number,
         Body=chunk
     )
-    
+
     # Update progress
     progress.update(len(chunk))
-    
+
     # Return part info for completing the upload
     return {
         'PartNumber': part_number,
@@ -244,13 +244,13 @@ async def upload_video_to_r2(file: UploadFile = File(...)):
             except (AttributeError, ValueError):
                 # If all else fails, we'll use the threshold-based approach
                 file_size = 0
-                
+
         # Log the file size
         logger.info(f"Uploading file of size: {file_size} bytes")
-        
-        # For large files (>10MB), use multipart upload
-        large_file_threshold = 10 * 1024 * 1024  # 10MB
-        
+
+        # For large files (>100MB), use multipart upload
+        large_file_threshold = 100 * 1024 * 1024  # 100MB
+
         if file_size > large_file_threshold:
             logger.info(f"Large file detected ({file_size} bytes). Using multipart upload.")
             await upload_large_file(
@@ -270,7 +270,7 @@ async def upload_video_to_r2(file: UploadFile = File(...)):
                     "ContentType": file.content_type  # Set content type for proper serving
                 },
             )
-            
+
         logger.info(
             f"Successfully uploaded '{unique_filename}' to R2 bucket '{R2_BUCKET_NAME}'."
         )
