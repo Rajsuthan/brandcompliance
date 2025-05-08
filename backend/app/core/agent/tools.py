@@ -2156,15 +2156,27 @@ async def check_image_clarity(data):
 
 async def attempt_completion(data):
     """Provide a final recommendation based on synthesized data."""
+    # Check for different possible input formats
     result = data.get("result")
-    if not result:
+    compliance_summary = data.get("compliance_summary")
+    compliance_status = data.get("compliance_status", "unknown")
+    task_detail = data.get("task_detail", "Brand Compliance Analysis")
+
+    # Use compliance_summary as result if available and no result is provided
+    if not result and compliance_summary:
+        result = compliance_summary
+
+    # If we still don't have a result, check if we have any data at all
+    if not result and not compliance_summary:
         return "Error: No result provided for completion."
 
-    # Simulate a final recommendation
+    # Create the final recommendation
     recommendation = {
-        "recommendation": result,
-        "summary": "Based on analysis of brand guidelines and image content",
+        "recommendation": result or compliance_summary,
+        "summary": task_detail,
         "timestamp": "2025-03-19",
+        "compliance_status": compliance_status,
+        "name": "attempt_completion"  # Add the name field that might be expected
     }
 
     return json.dumps(recommendation)

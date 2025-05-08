@@ -32,6 +32,22 @@ async def get_video_color_scheme(data):
     Get the color scheme of the video frame(s) at the specified timestamp.
     Handles both single frame and multiple frames.
     """
+    # Log all keys in the data dictionary
+    print(f"\033[93m[DEBUG] get_video_color_scheme received keys: {list(data.keys())}\033[0m")
+
+    # Log the values (truncated) for each key
+    for key, value in data.items():
+        if key in ["images_base64", "image_base64"]:
+            if isinstance(value, list):
+                print(f"\033[93m[DEBUG] {key}: List with {len(value)} items\033[0m")
+                if value and len(value) > 0:
+                    first_item = value[0]
+                    print(f"\033[93m[DEBUG] {key}[0] (first 50 chars): {str(first_item)[:50]}...\033[0m")
+            else:
+                print(f"\033[93m[DEBUG] {key} (first 50 chars): {str(value)[:50]}...\033[0m")
+        else:
+            print(f"\033[93m[DEBUG] {key}: {value}\033[0m")
+
     timestamp = data.get("timestamp", 0)
 
     # Check if we have multiple frames or a single frame
@@ -40,10 +56,12 @@ async def get_video_color_scheme(data):
         # Fall back to single image for backward compatibility
         single_image = data.get("image_base64")
         if single_image:
+            print(f"\033[93m[DEBUG] Using single image_base64 (length: {len(single_image)})\033[0m")
             images_base64 = [single_image]
 
     # Check if we have any frames to process
     if not images_base64:
+        print(f"\033[91m[ERROR] No images provided for the video frame(s). Data keys: {list(data.keys())}\033[0m")
         return json.dumps({"error": "No images provided for the video frame(s)."})
 
     try:
@@ -375,6 +393,22 @@ async def extract_verbal_content(data):
     Extract all verbal content from video (both spoken and displayed text).
     This tool uses OCR to extract text visible in frames.
     """
+    # Log all keys in the data dictionary
+    print(f"\033[93m[DEBUG] extract_verbal_content received keys: {list(data.keys())}\033[0m")
+
+    # Log the values (truncated) for each key
+    for key, value in data.items():
+        if key in ["images_base64", "image_base64"]:
+            if isinstance(value, list):
+                print(f"\033[93m[DEBUG] {key}: List with {len(value)} items\033[0m")
+                if value and len(value) > 0:
+                    first_item = value[0]
+                    print(f"\033[93m[DEBUG] {key}[0] (first 50 chars): {str(first_item)[:50]}...\033[0m")
+            else:
+                print(f"\033[93m[DEBUG] {key} (first 50 chars): {str(value)[:50]}...\033[0m")
+        else:
+            print(f"\033[93m[DEBUG] {key}: {value}\033[0m")
+
     timestamps = data.get("timestamps", [])
 
     # If no specific timestamps provided, use all available timestamps
@@ -388,6 +422,8 @@ async def extract_verbal_content(data):
     if not timestamps:
         timestamp = data.get("timestamp", 0)
         timestamps = [timestamp]
+
+    print(f"\033[93m[DEBUG] Processing timestamps: {timestamps}\033[0m")
 
     try:
         # Import necessary libraries for OCR

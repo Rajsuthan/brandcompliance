@@ -97,9 +97,11 @@ async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=
                 # Compress the image by reducing JPEG quality to 70% (30% compression)
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                 _, buffer = cv2.imencode('.jpg', frame, encode_params)
+                base64_data = base64.b64encode(buffer).decode('utf-8')
                 frames.append({
                     'timestamp': timestamp,
-                    'base64': base64.b64encode(buffer).decode('utf-8'),
+                    'base64': base64_data,
+                    'image_data': base64_data,  # Add image_data key for OpenRouterAgent
                     'frame_number': frame_count
                 })
                 prev_frame = frame

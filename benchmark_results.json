@@ -1,0 +1,25 @@
+[
+  {
+    "test_id": "burger_king_video_1",
+    "asset_type": "Video",
+    "asset_path": "../files_for_testing/Burger King_Compliant_BrandVoice-1.mp4",
+    "expected_results": "Expected Issues: No Issues\n\nExpected Positives: Verbal Identity: Influencer in video was enthusastic and confident, without being naive, childish or flashy. \n\nVisual Identity: All burger king logos were clear, with no inversion or blurring. ",
+    "brand": "Burger King",
+    "asset_name": "Burger King_Compliant_BrandVoice-1",
+    "compliance_status": "Compliant",
+    "expected_positives": "Verbal Identity: Influencer in video was enthusastic and confident, without being naive, childish or flashy. \n\nVisual Identity: All burger king logos were clear, with no inversion or blurring. ",
+    "brand_guidelines_reference": "Verbal Identity: Page 23 and Page 24\nVisual Identity: Page 51",
+    "score": 1.0,
+    "comments": "This was a compliant video based on a few visual and verbal identity cues. The brand compliance system should review all guidelines and check for all visual and verbal identity elements. ",
+    "asset_exists": false,
+    "status": "skipped",
+    "error": "No valid asset path",
+    "evaluation": {
+      "score": 0,
+      "feedback": "No actual results to evaluate",
+      "missed_issues": [],
+      "false_positives": [],
+      "evaluation_time": 0
+    }
+  }
+]

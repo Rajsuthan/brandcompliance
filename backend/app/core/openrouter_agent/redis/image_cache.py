@@ -23,14 +23,14 @@ MAX_PARALLEL_CHUNKS = cache_config["max_parallel_chunks"]  # Default: 5 chunks i
 
 class ImageCache:
     """Redis-based cache for large base64 encoded images with chunking support.
-    
+
     This class handles caching large base64 encoded images by splitting them into
     manageable chunks and storing them in Redis with appropriate metadata.
     """
-    
+
     def __init__(self, prefix: str = "guideline_image", chunk_size: int = DEFAULT_CHUNK_SIZE, ttl: int = DEFAULT_TTL):
         """Initialize the image cache.
-        
+
         Args:
             prefix: Key prefix for Redis keys
             chunk_size: Size of each chunk in bytes
@@ -48,14 +48,14 @@ class ImageCache:
             "chunk_stores": 0,
             "chunk_retrievals": 0
         }
-    
+
     def _generate_key(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Generate a deterministic cache key based on tool name and arguments.
-        
+
         Args:
             tool_name: Name of the tool being cached
             args: Tool arguments (excluding large base64 data)
-            
+
         Returns:
             A string key for Redis
         """
@@ -67,32 +67,97 @@ class ImageCache:
                 filtered_args[k] = f"<base64_data_{len(v)}bytes>"
             else:
                 filtered_args[k] = v
-        
+
         # Create a deterministic string representation and hash it
         key_data = f"{tool_name}:{json.dumps(filtered_args, sort_keys=True)}"
         key_hash = hashlib.md5(key_data.encode()).hexdigest()
         return f"{self.prefix}:{tool_name}:{key_hash}"
-    
+
+    async def _manage_cache_memory(self, clear_percentage: float = 0.35) -> None:
+        """Clear a percentage of the cache to manage memory usage.
+
+        Args:
+            clear_percentage: Percentage of keys to clear (0.0 to 1.0)
+        """
+        try:
+            # Get all keys with our prefix
+            pattern = f"{self.prefix}:*:metadata"
+            keys = await self.redis.keys(pattern)
+
+            if not keys:
+                print(f"\033[94m[REDIS CACHE] No keys to clear for pattern {pattern}\033[0m")
+                return
+
+            # Calculate how many keys to remove
+            total_keys = len(keys)
+            keys_to_remove = int(total_keys * clear_percentage)
+
+            if keys_to_remove == 0:
+                keys_to_remove = 1  # Remove at least one key
+
+            print(f"\033[94m[REDIS CACHE] 🧹 Clearing {keys_to_remove}/{total_keys} keys ({clear_percentage*100:.1f}%) to manage memory\033[0m")
+
+            # Sort keys by creation time if possible, otherwise just take random keys
+            keys_to_delete = keys[:keys_to_remove]
+
+            # For each metadata key, get the chunk count and delete all related chunks
+            pipe = self.redis.pipeline()
+            deleted_chunks = 0
+
+            for metadata_key in keys_to_delete:
+                # Get metadata to find out how many chunks
+                metadata_bytes = await self.redis.get(metadata_key)
+                if metadata_bytes:
+                    try:
+                        metadata = json.loads(metadata_bytes.decode('utf-8'))
+                        chunk_count = metadata.get("chunk_count", 0)
+                        base_key = metadata_key[:-9]  # Remove ":metadata" suffix
+
+                        # Delete all chunks
+                        for i in range(chunk_count):
+                            pipe.delete(f"{base_key}:chunk:{i}")
+                            deleted_chunks += 1
+
+                        # Delete metadata
+                        pipe.delete(metadata_key)
+                    except json.JSONDecodeError:
+                        # If metadata is corrupted, just delete the key
+                        pipe.delete(metadata_key)
+                else:
+                    # If metadata doesn't exist, just delete the key
+                    pipe.delete(metadata_key)
+
+            # Execute all deletions
+            await pipe.execute()
+            print(f"\033[94m[REDIS CACHE] 🧹 Cleared {len(keys_to_delete)} metadata keys and approximately {deleted_chunks} chunk keys\033[0m")
+
+        except Exception as e:
+            logger.error(f"Error managing cache memory: {str(e)}")
+            print(f"\033[91m[REDIS CACHE] ❌ Error managing cache memory: {str(e)}\033[0m")
+
     async def _store_chunks(self, base_key: str, data: str) -> Dict[str, Any]:
         """Split and store data in chunks.
-        
+
         Args:
             base_key: Base Redis key for the image
             data: Base64 encoded image data
-            
+
         Returns:
             Metadata about the stored chunks
         """
+        # First, manage cache memory by clearing some percentage of existing keys
+        await self._manage_cache_memory(clear_percentage=0.35)
+
         # Convert string to bytes if needed
         if isinstance(data, str):
             data_bytes = data.encode('utf-8')
         else:
             data_bytes = data
-            
+
         # Split into chunks
         chunks = [data_bytes[i:i+self.chunk_size] for i in range(0, len(data_bytes), self.chunk_size)]
         chunk_count = len(chunks)
-        
+
         # Store metadata
         metadata = {
             "chunk_count": chunk_count,
@@ -101,31 +166,31 @@ class ImageCache:
             "created_at": int(time.time()),
             "expires_at": int(time.time()) + self.ttl
         }
-        
+
         # Store metadata
         await self.redis.set(
-            f"{base_key}:metadata", 
+            f"{base_key}:metadata",
             json.dumps(metadata).encode('utf-8'),
             ex=self.ttl
         )
-        
+
         # Store chunks in parallel with pipeline
         pipe = self.redis.pipeline()
         for i, chunk in enumerate(chunks):
             pipe.set(f"{base_key}:chunk:{i}", chunk, ex=self.ttl)
             self.stats["chunk_stores"] += 1
-        
+
         await pipe.execute()
         print(f"\033[94m[REDIS CACHE] 💾 Stored {chunk_count} chunks ({len(data_bytes) // 1024}KB) for key {base_key}\033[0m")
         logger.debug(f"Stored {chunk_count} chunks for key {base_key}")
         return metadata
-    
+
     async def _retrieve_chunks(self, base_key: str) -> Optional[bytes]:
         """Retrieve and combine chunks for an image.
-        
+
         Args:
             base_key: Base Redis key for the image
-            
+
         Returns:
             Combined data from all chunks or None if not found
         """
@@ -133,47 +198,47 @@ class ImageCache:
         metadata_bytes = await self.redis.get(f"{base_key}:metadata")
         if not metadata_bytes:
             return None
-            
+
         metadata = json.loads(metadata_bytes.decode('utf-8'))
         chunk_count = metadata["chunk_count"]
-        
+
         # Retrieve chunks in batches to avoid too many concurrent operations
         all_chunks = []
         for batch_start in range(0, chunk_count, MAX_PARALLEL_CHUNKS):
             batch_end = min(batch_start + MAX_PARALLEL_CHUNKS, chunk_count)
             batch_keys = [f"{base_key}:chunk:{i}" for i in range(batch_start, batch_end)]
-            
+
             # Get chunks in parallel
             chunk_data = await self.redis.mget(batch_keys)
             self.stats["chunk_retrievals"] += len(batch_keys)
-            
+
             # Check if any chunks are missing
             if None in chunk_data:
                 logger.error(f"Missing chunks for {base_key}, cache may be corrupted")
                 self.stats["errors"] += 1
                 return None
-                
+
             all_chunks.extend(chunk_data)
-        
+
         # Combine chunks
         combined_data = b''.join(all_chunks)
-        
+
         # Verify size
         if len(combined_data) != metadata["total_size"]:
             logger.error(f"Size mismatch for {base_key}: expected {metadata['total_size']}, got {len(combined_data)}")
             self.stats["errors"] += 1
             return None
-            
+
         return combined_data
-    
+
     async def store(self, tool_name: str, args: Dict[str, Any], result: str) -> bool:
         """Store a base64 encoded image in the cache.
-        
+
         Args:
             tool_name: Name of the tool that produced the result
             args: Arguments passed to the tool
             result: Base64 encoded image data
-            
+
         Returns:
             True if stored successfully, False otherwise
         """
@@ -187,21 +252,25 @@ class ImageCache:
             logger.exception(f"Error storing image in cache: {str(e)}")
             self.stats["errors"] += 1
             return False
-    
+
     async def get(self, tool_name: str, args: Dict[str, Any]) -> Optional[str]:
         """Retrieve a base64 encoded image from the cache.
-        
+
         Args:
             tool_name: Name of the tool
             args: Arguments passed to the tool
-            
+
         Returns:
             Base64 encoded image data or None if not found
         """
         try:
+            # Occasionally manage cache memory on cache hits too (with lower probability)
+            if hash(str(args)) % 5 == 0:  # ~20% chance to clear cache on get
+                await self._manage_cache_memory(clear_percentage=0.15)  # Clear less on gets
+
             key = self._generate_key(tool_name, args)
             data = await self._retrieve_chunks(key)
-            
+
             if data is not None:
                 self.stats["hits"] += 1
                 print(f"\033[92m[REDIS CACHE] 👍 CACHE HIT for tool {tool_name} - Using cached base64 image ({len(data) // 1024}KB)\033[0m")
@@ -217,13 +286,13 @@ class ImageCache:
             logger.exception(f"Error retrieving image from cache: {str(e)}")
             self.stats["errors"] += 1
             return None
-    
+
     async def store_in_background(self, tool_name: str, args: Dict[str, Any], result: str) -> None:
         """Store image in cache without blocking the main process.
-        
+
         This method starts a background task to store the image data without
         waiting for it to complete, allowing the main process to continue.
-        
+
         Args:
             tool_name: Name of the tool that produced the result
             args: Arguments passed to the tool
@@ -232,17 +301,17 @@ class ImageCache:
         # Create a task but don't wait for it
         asyncio.create_task(self.store(tool_name, args, result))
         logger.debug(f"Started background task to cache result for tool {tool_name}")
-    
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics.
-        
+
         Returns:
             Dictionary with cache statistics
         """
         hit_rate = 0
         if (self.stats["hits"] + self.stats["misses"]) > 0:
             hit_rate = self.stats["hits"] / (self.stats["hits"] + self.stats["misses"])
-            
+
         return {
             **self.stats,
             "hit_rate": hit_rate,

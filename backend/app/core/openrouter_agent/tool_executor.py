@@ -27,13 +27,13 @@ async def execute_and_process_tool(
         tool_call_id = f"hashed_{hashed_id}"
         print(f"\033[93m[WARNING] tool_call_id was too long, replaced with hash: {tool_call_id}\033[0m")
     """Execute a tool and prepare results for the agent response.
-    
+
     Args:
         tool_name: The name of the tool to execute
         tool_args: Arguments to pass to the tool
         tool_call_id: Optional ID of the tool call (for OpenAI compatibility)
         on_stream: Optional streaming callback function
-        
+
     Returns:
         A dictionary with the tool execution results and metadata
     """
@@ -42,12 +42,114 @@ async def execute_and_process_tool(
         tool_args_str = str(tool_args)
         print(f"\033[92m[TOOL EXEC] Executing {tool_name}...\033[0m")
         print(f"\033[92m[TOOL INPUT SIZE] {tool_name}: {len(tool_args_str)} chars\033[0m")
-        
-        # For image input, show the length but not the content
-        if isinstance(tool_args, dict) and "image_base64" in tool_args and tool_args["image_base64"]:
-            img_len = len(tool_args["image_base64"])
-            print(f"\033[92m[IMAGE SIZE] Image in {tool_name}: {img_len} chars\033[0m")
-        
+
+        # Log all keys in tool_args
+        if isinstance(tool_args, dict):
+            print(f"\033[93m[DEBUG] {tool_name} received keys: {list(tool_args.keys())}\033[0m")
+
+            # Log values for non-image keys
+            for key, value in tool_args.items():
+                if key not in ["image_base64", "images_base64"]:
+                    print(f"\033[93m[DEBUG] {key}: {value}\033[0m")
+
+            # For image input, show the length but not the content
+            if "image_base64" in tool_args and tool_args["image_base64"]:
+                img_len = len(tool_args["image_base64"])
+                print(f"\033[92m[IMAGE SIZE] image_base64 in {tool_name}: {img_len} chars\033[0m")
+                print(f"\033[93m[DEBUG] image_base64 (first 20 chars): {tool_args['image_base64'][:20]}...\033[0m")
+            else:
+                print(f"\033[93m[DEBUG] No image_base64 found in {tool_name}\033[0m")
+
+            # For images_base64 array, show the length and count
+            if "images_base64" in tool_args and tool_args["images_base64"]:
+                if isinstance(tool_args["images_base64"], list):
+                    img_count = len(tool_args["images_base64"])
+                    total_len = sum(len(img) for img in tool_args["images_base64"] if isinstance(img, str))
+                    print(f"\033[92m[IMAGE SIZE] images_base64 in {tool_name}: {img_count} images, total {total_len} chars\033[0m")
+
+                    # Log the first few characters of the first image
+                    if img_count > 0 and isinstance(tool_args["images_base64"][0], str):
+                        first_img = tool_args["images_base64"][0]
+                        print(f"\033[93m[DEBUG] First image in images_base64 (first 20 chars): {first_img[:20]}...\033[0m")
+                else:
+                    print(f"\033[91m[ERROR] images_base64 in {tool_name} is not a list: {type(tool_args['images_base64'])}\033[0m")
+            else:
+                print(f"\033[93m[DEBUG] No images_base64 found in {tool_name}\033[0m")
+
+            # CRITICAL: Check if this is a video tool and ensure frames are added
+            video_tools = {
+                "get_video_color_scheme",
+                "get_video_fonts",
+                "check_video_frame_specs",
+                "extract_verbal_content",
+                "get_region_color_scheme",
+                "check_color_contrast",
+                "check_element_placement",
+                "check_image_clarity",
+                "check_text_grammar",
+            }
+
+            if tool_name in video_tools:
+                has_images_base64 = "images_base64" in tool_args and tool_args["images_base64"]
+                has_image_base64 = "image_base64" in tool_args and tool_args["image_base64"]
+
+                print(f"\033[93m[DEBUG] Video tool check - has_images_base64: {has_images_base64}, has_image_base64: {has_image_base64}\033[0m")
+
+                # If neither is present but we have frames, add them
+                if not (has_images_base64 or has_image_base64) and frames and len(frames) > 0:
+                    print(f"\033[91m[ERROR] {tool_name} is missing both images_base64 and image_base64. Adding frames now.\033[0m")
+
+                    # For extract_verbal_content, add frames for timestamps
+                    if tool_name == "extract_verbal_content":
+                        # Get timestamps or use defaults
+                        timestamps = tool_args.get("timestamps", [5, 10, 15])
+
+                        # Add timestamps to tool_args if not present
+                        if "timestamps" not in tool_args:
+                            tool_args["timestamps"] = timestamps
+                            print(f"\033[92m[INFO] Added default timestamps to extract_verbal_content: {timestamps}\033[0m")
+
+                        # For each timestamp, find the closest frame
+                        images_base64 = []
+                        for ts in timestamps:
+                            closest_frame = min(frames, key=lambda f: abs(f.get("timestamp", 0) - float(ts)))
+                            frame_base64 = closest_frame.get("image_data") or closest_frame.get("base64")
+                            if frame_base64:
+                                images_base64.append(frame_base64)
+
+                        if images_base64:
+                            print(f"\033[92m[INFO] TOOL EXECUTOR - Adding {len(images_base64)} frames to images_base64 for extract_verbal_content\033[0m")
+                            tool_args["images_base64"] = images_base64
+                            tool_args["image_base64"] = images_base64[0]  # Add first frame as image_base64
+
+                    # For other video tools with timestamp
+                    elif "timestamp" in tool_args:
+                        target_ts = tool_args["timestamp"]
+                        print(f"\033[93m[DEBUG] TOOL EXECUTOR - Looking for timestamp: {target_ts}\033[0m")
+
+                        # Find the closest frame
+                        closest_frame = min(frames, key=lambda f: abs(f.get("timestamp", 0) - float(target_ts)))
+                        frame_base64 = closest_frame.get("image_data") or closest_frame.get("base64")
+
+                        if frame_base64:
+                            print(f"\033[92m[INFO] TOOL EXECUTOR - Adding closest frame to image_base64 and images_base64\033[0m")
+                            tool_args["image_base64"] = frame_base64
+                            tool_args["images_base64"] = [frame_base64]
+
+                    # For other video tools without timestamp
+                    else:
+                        # Add all frames
+                        images_base64 = []
+                        for frame in frames:
+                            frame_data = frame.get("image_data") or frame.get("base64")
+                            if frame_data:
+                                images_base64.append(frame_data)
+
+                        if images_base64:
+                            print(f"\033[92m[INFO] TOOL EXECUTOR - Adding all {len(images_base64)} frames\033[0m")
+                            tool_args["images_base64"] = images_base64
+                            tool_args["image_base64"] = images_base64[0]
+
         # Check if we have a cached result for this tool call
         cached_result = tool_cache.get(tool_name, tool_args)
         if cached_result is not None:
@@ -56,13 +158,13 @@ async def execute_and_process_tool(
         else:
             # Check if we have a cached base64 image for this tool call
             cached_base64 = await get_cached_image(tool_name, tool_args)
-            
+
             if cached_base64 is not None:
                 print(f"\033[92m[REDIS CACHE] 👍 IMAGE CACHE HIT for {tool_name} - Using cached base64 image ({len(cached_base64) // 1024}KB)\033[0m")
-                
+
                 # Execute the tool to get the basic result structure
                 tool_result = await execute_tool(tool_name, tool_args)
-                
+
                 # If the result is a string (JSON), parse it
                 if isinstance(tool_result, str):
                     try:
@@ -78,24 +180,24 @@ async def execute_and_process_tool(
             else:
                 # Execute the tool and cache the result
                 tool_result = await execute_tool(tool_name, tool_args)
-                
+
                 # Cache the base64 image if present in the result
                 await cache_tool_result(tool_name, tool_args, tool_result)
-            
+
             # Cache the full tool result
             tool_cache.set(tool_name, tool_args, tool_result)
-        
+
         # Log output sizes
         tool_result_str = str(tool_result)
         print(f"\033[95m[TOOL OUTPUT SIZE] {tool_name}: {len(tool_result_str)} chars\033[0m")
-        
+
         trunc_tool_result = tool_result_str[:300] + ("...[[TRUNCATED]]" if len(tool_result_str) > 300 else "")
         print(f"\033[95m[TOOL RESULT] {tool_name}: {trunc_tool_result}\033[0m")
     except Exception as e:
         print(f"\033[91m[ERROR] Exception in {tool_name}: {e}\033[0m")
         tool_result = {"error": str(e)}
         trunc_tool_result = str(tool_result)
-    
+
     # Create the result record for the tool trace
     trace_record = {
         "timestamp": datetime.datetime.now().isoformat(),
@@ -105,7 +207,7 @@ async def execute_and_process_tool(
         "full_result": tool_result if tool_name == "attempt_completion" else None,
         "cached": cached_result is not None  # Track if result was from cache
     }
-    
+
     # Stream tool result to the client if needed
     if on_stream:
         # Remove image_base64 and images_base64 from tool_input before sending
@@ -113,7 +215,7 @@ async def execute_and_process_tool(
         if isinstance(filtered_tool_args, dict):
             filtered_tool_args.pop("image_base64", None)
             filtered_tool_args.pop("images_base64", None)
-        
+
         await on_stream({
             "type": "tool",
             "tool_name": tool_name,
@@ -123,12 +225,12 @@ async def execute_and_process_tool(
                 "tool_result": tool_result
             })
         })
-    
+
     # Prepare a SIMPLIFIED message format for OpenAI compatibility
     # Only include a summarized version of the tool result to prevent token explosion
     # Maximum length for tool result in the message format
     MAX_TOOL_RESULT_LENGTH = 5000  # Reasonable limit to prevent explosion
-    
+
     # If the tool result is too long, truncate it drastically
     tool_result_str = str(tool_result)
     if len(tool_result_str) > MAX_TOOL_RESULT_LENGTH:
@@ -149,7 +251,7 @@ async def execute_and_process_tool(
                         return obj[:max_len] + "...truncated..."
                     else:
                         return obj
-                
+
                 # Truncate the object
                 truncated_obj = truncate_values(result_obj)
                 truncated_result = json.dumps(truncated_obj)
@@ -164,28 +266,28 @@ async def execute_and_process_tool(
             truncated_result = tool_result_str[:MAX_TOOL_RESULT_LENGTH] + "...truncated..."
     else:
         truncated_result = tool_result_str
-    
+
     # Create the simplified message format
     message_format = {
         "tool_call_id": tool_call_id,
         "name": tool_name,
         "content": truncated_result
     }
-    
+
     # Log the size of all components for debugging
     tool_call_id_len = len(str(tool_call_id)) if tool_call_id else 0
     print(f"\033[93m[DEBUG] tool_call_id length: {tool_call_id_len} chars\033[0m")
     print(f"\033[93m[DEBUG] Original tool result length: {len(tool_result_str)} chars\033[0m")
     print(f"\033[93m[DEBUG] Truncated result length: {len(truncated_result)} chars\033[0m")
     print(f"\033[93m[DEBUG] Final message format length: {len(str(message_format))} chars\033[0m")
-    
+
     # Return the tool result in the proper OpenAI/OpenRouter compatible format
     return message_format
 
 # Function to get cache statistics for monitoring
 def get_cache_stats():
     """Get current cache statistics.
-    
+
     Returns:
         Dictionary with cache hit/miss statistics
     """
@@ -194,7 +296,7 @@ def get_cache_stats():
 # Function to clear the cache
 def clear_cache(tool_name=None):
     """Clear the tool result cache.
-    
+
     Args:
         tool_name: Optional tool name to clear cache for specific tool only
     """

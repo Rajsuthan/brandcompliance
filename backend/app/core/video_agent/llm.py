@@ -295,42 +295,44 @@ async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=
     fps = cap.get(cv2.CAP_PROP_FPS)
     frames = []
     frame_count = 0
-    
+
     # Calculate total frames for progress reporting
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"Processing video with {total_frames} total frames")
-    
+
     # Determine optimal sampling rate based on video length
     # For compliance analysis, we want to capture frames frequently
     video_length = total_frames / fps if fps > 0 else 0
-    
+
     # Use a fixed small interval for maximum frame capture
     # This ensures we don't miss any important brand elements
     fixed_interval = initial_interval  # Default to 0.1 seconds between frames
-    
+
     last_timestamp = -1
-    
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-            
+
         frame_count += 1
         timestamp = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
-        
+
         # Progress reporting
         if frame_count % 100 == 0:
             progress = (frame_count / total_frames) * 100 if total_frames > 0 else 0
             print(f"Processed {frame_count}/{total_frames} frames ({progress:.1f}%)")
-        
+
         # Capture frame if it's at least fixed_interval seconds from the last captured frame
         # This ensures we capture frames at regular intervals without missing anything
         if last_timestamp < 0 or (timestamp - last_timestamp) >= fixed_interval:
             # Encode and store frame
             _, buffer = cv2.imencode('.jpg', frame)
+            base64_data = base64.b64encode(buffer).decode('utf-8')
             frames.append({
                 'timestamp': timestamp,
-                'base64': base64.b64encode(buffer).decode('utf-8'),
+                'base64': base64_data,
+                'image_data': base64_data,  # Add image_data key for OpenRouterAgent
                 'frame_number': frame_count
             })
             last_timestamp = timestamp
