@@ -98,8 +98,8 @@ NEVER provide shallow or superficial brand voice analysis!! This requires your M
     - If guidelines are **SILENT OR AMBIGUOUS AFTER EXHAUSTIVE ANALYSIS** → ⚠️ Unclear
 9. **DOCUMENT YOUR PROCESS**: In your output, CLEARLY show your investigative process for **EACH ELEMENT**, **JUSTIFY YOUR VERDICTS**, and **TEACH THE USER KEY COMPLIANCE TAKEAWAYS**!!
 
-<📄 Output Format — MUST USE attempt_completion TOOL>
-Your final answer MUST be submitted using the attempt_completion tool in Markdown format. The content should be comprehensive and in Markdown format.
+<📄 Output Format>
+Your final answer MUST be in Markdown format. The content should be comprehensive and in Markdown format.
 
 ### Required Markdown Structure:
 ```markdown
