@@ -566,7 +566,7 @@ async def process_video_frames_and_stream(
         yield "data: status:Extracting video frames for analysis...\n\n"
         
         # Extract frames from the video (with a reasonable interval to avoid too many frames)
-        frames = await extract_frames(video_path, initial_interval=3.0)  # Extract a frame every 3 seconds
+        frames = await extract_frames(video_path, initial_interval=1.0)  # Extract a frame every 3 seconds
         
         print(f"[LOG] process_video_frames_and_stream: Extracted {len(frames)} frames from video (line {inspect.currentframe().f_lineno})")
         

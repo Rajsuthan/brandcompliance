@@ -90,7 +90,7 @@ async def extract_frames(video_path, initial_interval=0.1, similarity_threshold=
         if last_timestamp < 0 or (timestamp - last_timestamp) >= fixed_interval:
             is_unique = True
             if prev_frame is not None:
-                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.8)
+                is_similar, score = calculate_frame_similarity(prev_frame, frame, threshold=0.5)
                 if is_similar:
                     is_unique = False
             if is_unique:
@@ -141,7 +141,7 @@ async def generate(video_path):
     is_valid, error = await validate_video_file(video_path)
     if not is_valid:
         raise Exception(f"Invalid video file: {error}")
-    frames = await extract_frames(video_path, initial_interval=1, similarity_threshold=0.8)
+    frames = await extract_frames(video_path, initial_interval=1, similarity_threshold=0.5)
     frame_captions = {"error": "Audio transcription disabled"}
     model = "gemini-2.0-flash"
     analysis_modes = ["visual", "brand_voice", "tone"]
