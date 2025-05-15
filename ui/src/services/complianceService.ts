@@ -5,8 +5,8 @@
 
 // Base URL for the API
 // local
-// export const API_BASE_URL = "http://localhost:8000";
-export const API_BASE_URL = "https://brandcompliance.onrender.com";
+export const API_BASE_URL = "http://localhost:8000";
+// export const API_BASE_URL = "https://brandcompliance.onrender.com";
 
 // Interface for authentication response
 interface AuthResponse {
@@ -55,32 +55,58 @@ interface GetFeedbackResponse {
 }
 
 /**
- * Login to get an authentication token
- * @param username User's username
- * @param password User's password
- * @returns Promise with the authentication token
+ * Verify a Firebase ID token with the backend
+ * @param token Firebase ID token
+ * @returns Promise with the user data
  */
-export const login = async (
-  username: string,
-  password: string
-): Promise<string> => {
+export const verifyFirebaseToken = async (token: string): Promise<any> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ username, password }),
-    });
+    const response = await fetch(
+      `${API_BASE_URL}/api/firebase-auth/verify-token`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
 
     if (!response.ok) {
-      throw new Error(`Login failed: ${response.status}`);
+      throw new Error(`Token verification failed: ${response.status}`);
     }
 
-    const data: AuthResponse = await response.json();
-    return data.access_token;
+    return response.json();
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("Token verification error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get user's compliance analysis history
+ * @param token Firebase ID token
+ * @returns Promise with the compliance history
+ */
+export const getUserComplianceHistory = async (
+  token: string
+): Promise<any[]> => {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/firebase-auth/compliance-history`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch compliance history: ${response.status}`);
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Error fetching compliance history:", error);
     throw error;
   }
 };

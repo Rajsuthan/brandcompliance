@@ -16,20 +16,25 @@ parser.add_argument('--backend-url', default='http://localhost:8000', help='Back
 args = parser.parse_args()
 
 # Initialize Firebase Admin SDK
-cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", "app/auth/compliance-d0f59-firebase-adminsdk-fbsvc-2a0b6c762f.json")
-
 try:
-    # Check if the credentials file exists
-    if os.path.exists(cred_path):
-        cred = credentials.Certificate(cred_path)
-    else:
-        # Try to load from environment variable as fallback
-        cred_json = os.getenv("FIREBASE_CREDENTIALS")
-        if cred_json:
+    # First try to load from environment variable (preferred method)
+    cred_json = os.getenv("FIREBASE_CREDENTIALS")
+    if cred_json:
+        try:
             cred_dict = json.loads(cred_json)
             cred = credentials.Certificate(cred_dict)
+            print(f"✅ Using Firebase credentials from environment variable")
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing FIREBASE_CREDENTIALS environment variable: {str(e)}")
+            raise ValueError("FIREBASE_CREDENTIALS environment variable contains invalid JSON")
+    else:
+        # Fallback to file-based credentials
+        cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", "app/auth/firebase-service-account.json")
+        if os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            print(f"✅ Using Firebase credentials from file: {cred_path}")
         else:
-            raise ValueError(f"Firebase credentials file not found at {cred_path} and FIREBASE_CREDENTIALS environment variable not set")
+            raise ValueError("Firebase credentials not found. Please set FIREBASE_CREDENTIALS environment variable or provide a valid credentials file")
 
     # Initialize the Firebase app
     firebase_app = firebase_admin.initialize_app(cred)

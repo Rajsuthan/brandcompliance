@@ -56,6 +56,13 @@ WHATFONTIS_API_KEY="your-whatfontis-api-key"
 GOOGLE_CLOUD_PROJECT="your-google-cloud-project-id"
 GOOGLE_CLOUD_LOCATION="your-google-cloud-location"
 
+# Firebase Settings (IMPORTANT - use one of these methods)
+# Option 1: Set the JSON content directly (recommended for production)
+FIREBASE_CREDENTIALS='{"type":"service_account","project_id":"your-project-id","private_key_id":"your-private-key-id","private_key":"-----BEGIN PRIVATE KEY-----\\nYour private key here\\n-----END PRIVATE KEY-----\\n","client_email":"your-service-account-email@your-project-id.iam.gserviceaccount.com","client_id":"your-client-id","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/your-service-account-email%40your-project-id.iam.gserviceaccount.com","universe_domain":"googleapis.com"}'
+
+# Option 2: Set the path to your service account file (for development)
+FIREBASE_CREDENTIALS_PATH="app/auth/firebase-service-account.json"
+
 # Auth settings
 SECRET_KEY="your-secret-key-here"
 ALGORITHM="HS256"
@@ -63,6 +70,42 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 ```
 
 Replace the placeholder values with your actual API keys and configuration.
+
+## Firebase Setup
+
+This application uses Firebase for authentication and Firestore for data storage. To set up Firebase:
+
+1. Create a Firebase project at [https://console.firebase.google.com/](https://console.firebase.google.com/)
+
+2. Generate a service account key:
+
+   - Go to Project Settings > Service Accounts
+   - Click "Generate new private key"
+   - Save the JSON file securely
+
+3. Configure Firebase credentials using one of these methods:
+
+   **Method 1: Environment Variable (Recommended for production)**
+
+   - Set the `FIREBASE_CREDENTIALS` environment variable with the entire JSON content of your service account key
+   - Make sure to escape newlines in the private key with `\\n`
+
+   **Method 2: JSON File (Easier for development)**
+
+   - Save your service account key as `backend/app/auth/firebase-service-account.json`
+   - Set `FIREBASE_CREDENTIALS_PATH` in your `.env` file to point to this file
+   - **IMPORTANT**: Never commit this file to version control!
+   - Add it to your `.gitignore` file
+
+4. Enable Authentication methods in the Firebase Console:
+
+   - Go to Authentication > Sign-in method
+   - Enable Email/Password and Google authentication methods
+
+5. Set up Firestore database:
+   - Go to Firestore Database
+   - Create a database in production mode
+   - Choose a location close to your users
 
 ## Running the Application
 
@@ -166,6 +209,26 @@ If video processing fails:
 1. Ensure you have sufficient disk space for temporary video files
 2. Check that the video URL is accessible
 3. Verify that all required Python packages are installed (opencv-python, yt-dlp)
+
+### Firebase Authentication Issues
+
+If you encounter Firebase authentication issues:
+
+1. Check that your Firebase service account credentials are correctly configured
+2. Verify that the Firebase project has Authentication enabled
+3. Ensure that the service account has the necessary permissions
+4. Check that the Firestore database is created and accessible
+5. If using environment variables, ensure the JSON is properly formatted with escaped newlines
+
+### Security Best Practices
+
+To maintain security of your Firebase credentials:
+
+1. Never commit service account keys to version control
+2. Use environment variables in production environments
+3. Regularly rotate service account keys
+4. Limit the permissions of your service account to only what's needed
+5. Monitor your Firebase project for unusual activity
 
 ## License
 

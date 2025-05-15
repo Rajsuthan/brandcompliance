@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-// Removed unused Button import
 import { UploadGuidelinesModal } from "@/components/ui/upload-guidelines-modal";
 import { FeedbackForm } from "@/components/ui/feedback-form";
 import { ProcessingToast } from "@/components/ui/processing-toast";
+import UserProfile from "@/components/auth/UserProfile";
+import { useAuth } from "@/lib/auth-context";
 import "@/animations.css";
 import {
-  login,
   checkImageCompliance,
   checkVideoCompliance,
 } from "@/services/complianceService";
@@ -25,7 +25,8 @@ interface ComplianceEvent {
 }
 
 export default function App() {
-  // Authentication state
+  // Use Firebase authentication
+  const { user, getIdToken } = useAuth();
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stepsCollapsed, setStepsCollapsed] = useState(false);
@@ -49,21 +50,24 @@ export default function App() {
     };
   }, []);
 
-  // Login on component mount
+  // Get Firebase ID token when user is authenticated
   useEffect(() => {
-    const performLogin = async () => {
-      try {
-        // Using test credentials from the test script
-        const token = await login("testuser2", "testpassword123");
-        setAuthToken(token);
-        console.log("Login successful");
-      } catch (error) {
-        console.error("Login failed:", error);
+    const getToken = async () => {
+      if (user) {
+        try {
+          const token = await getIdToken();
+          setAuthToken(token);
+          console.log("Firebase token obtained");
+        } catch (error) {
+          console.error("Failed to get Firebase token:", error);
+        }
+      } else {
+        setAuthToken(null);
       }
     };
 
-    performLogin();
-  }, []);
+    getToken();
+  }, [user, getIdToken]);
 
   // Helper function to format elapsed time
   const formatTime = (seconds: number): string => {
@@ -243,7 +247,8 @@ export default function App() {
               const parsed = JSON.parse(step.content);
               if (
                 parsed &&
-                (parsed.tool_name === "attempt_completion" || parsed.toolName === "attempt_completion") &&
+                (parsed.tool_name === "attempt_completion" ||
+                  parsed.toolName === "attempt_completion") &&
                 parsed.result
               ) {
                 finalResult =
@@ -297,7 +302,11 @@ export default function App() {
         }
         // Check for tool_input.task_detail/taskDetail
         if (jsonData.tool_input && typeof jsonData.tool_input === "object") {
-          return jsonData.tool_input.task_detail || jsonData.tool_input.taskDetail || undefined;
+          return (
+            jsonData.tool_input.task_detail ||
+            jsonData.tool_input.taskDetail ||
+            undefined
+          );
         }
       }
     } catch {
@@ -357,36 +366,6 @@ export default function App() {
 
   return (
     <div className="flex flex-col min-h-svh bg-zinc-950 text-white antialiased">
-      <header className="border-b border-zinc-800 py-3 px-4 sticky top-0 z-10 bg-zinc-950 backdrop-blur-sm bg-opacity-90">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className="size-6 bg-indigo-500 rounded-md flex items-center justify-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-4 w-4 text-white"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <p className="text-lg font-semibold text-white">
-                Brand Compliance
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Pass authToken if required by the component */}
-            <UploadGuidelinesModal authToken={authToken} />
-          </div>
-        </div>
-      </header>
-
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6">
         {/* Upload Section - shown when no processing is happening */}
         {processingItems.length === 0 && (
@@ -425,11 +404,11 @@ export default function App() {
         {processingItems.some(
           (item) => !item.isProcessing && item.finalResult
         ) && (
-            <div className="mt-12 pt-6 border-t border-zinc-800">
-              {/* Pass authToken if required by the component */}
-              <FeedbackForm authToken={authToken} />
-            </div>
-          )}
+          <div className="mt-12 pt-6 border-t border-zinc-800">
+            {/* Pass authToken if required by the component */}
+            <FeedbackForm authToken={authToken} />
+          </div>
+        )}
       </main>
 
       {/* Processing Toast */}
