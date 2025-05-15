@@ -664,30 +664,69 @@ async def get_brand_guidelines(data):
 
     try:
         # Import necessary modules
-        from app.db.database import brand_guidelines_collection, get_guideline_pages
+        # Import both MongoDB and Firestore functions for backward compatibility
+        from app.db.database import brand_guidelines_collection as brand_guidelines_collection_mongo, get_guideline_pages as get_guideline_pages_mongo
+        from app.db.firestore import brand_guidelines_collection, get_guideline_pages
         from bson.objectid import ObjectId
         import re
 
-        # First try an exact match
-        exact_match = brand_guidelines_collection.find_one({"brand_name": brand_name})
+        # Try to find the brand guideline in Firestore
+        best_match = None
+        try:
+            # First try an exact match in Firestore
+            query = brand_guidelines_collection.where('brand_name', '==', brand_name).limit(1)
+            matches = list(query.stream())
 
-        if exact_match:
-            # Found an exact match
-            best_match = exact_match
-            best_match["id"] = str(best_match["_id"])
-        else:
-            # Try a case-insensitive regex match
-            regex_pattern = f"^{re.escape(brand_name)}$"
-            regex_match = brand_guidelines_collection.find_one(
-                {"brand_name": {"$regex": regex_pattern, "$options": "i"}}
-            )
-
-            if regex_match:
-                # Found a case-insensitive match
-                best_match = regex_match
-                best_match["id"] = str(best_match["_id"])
+            if matches:
+                # Convert Firestore document to dict
+                best_match = matches[0].to_dict()
+                best_match["id"] = matches[0].id
             else:
-                # Try a fuzzy match by getting all guidelines and calculating similarity
+                # Try a case-insensitive match (Firestore doesn't support regex directly)
+                # We'll get all guidelines and filter in Python
+                all_guidelines_query = brand_guidelines_collection.limit(100)  # Limit to avoid too many results
+                all_guidelines = []
+                for doc in all_guidelines_query.stream():
+                    guideline = doc.to_dict()
+                    guideline["id"] = doc.id
+                    all_guidelines.append(guideline)
+
+                # Try case-insensitive match
+                for guide in all_guidelines:
+                    if guide.get("brand_name", "").lower() == brand_name.lower():
+                        best_match = guide
+                        break
+        except Exception as e:
+            print(f"[WARNING] Failed to search brand guidelines in Firestore: {str(e)}")
+
+        # If not found in Firestore, try MongoDB as fallback
+        if not best_match:
+            try:
+                # First try an exact match in MongoDB
+                exact_match = brand_guidelines_collection_mongo.find_one({"brand_name": brand_name})
+
+                if exact_match:
+                    # Found an exact match
+                    best_match = exact_match
+                    best_match["id"] = str(best_match["_id"])
+                else:
+                    # Try a case-insensitive regex match
+                    regex_pattern = f"^{re.escape(brand_name)}$"
+                    regex_match = brand_guidelines_collection_mongo.find_one(
+                        {"brand_name": {"$regex": regex_pattern, "$options": "i"}}
+                    )
+
+                    if regex_match:
+                        # Found a case-insensitive match
+                        best_match = regex_match
+                        best_match["id"] = str(best_match["_id"])
+                    else:
+                        # Try a fuzzy match by getting all guidelines and calculating similarity
+                        print(f"[INFO] No exact or regex match found in MongoDB, trying fuzzy match")
+            except Exception as e:
+                print(f"[WARNING] Failed to search brand guidelines in MongoDB: {str(e)}")
+
+        # If still not found, continue with fuzzy matching
                 def calculate_string_similarity(str1, str2):
                     """Calculate similarity between two strings (0-1)"""
                     str1 = str1.lower()
@@ -722,8 +761,9 @@ async def get_brand_guidelines(data):
 
                     return 1.0 - (distance / max_length)
 
-                # Get all guidelines
-                all_guidelines = list(brand_guidelines_collection.find({}))
+                # This is a MongoDB method but we're trying to use it on a Firestore collection
+                # Get all guidelines from MongoDB instead
+                all_guidelines = list(brand_guidelines_collection_mongo.find({}))
 
                 # Calculate similarity for each guideline
                 best_match = None
@@ -752,7 +792,17 @@ async def get_brand_guidelines(data):
             )
 
         # Get all pages for this guideline
-        pages = get_guideline_pages(best_match["id"], include_base64=False)
+        try:
+            # Try to get pages from Firestore
+            pages = get_guideline_pages(best_match["id"], include_base64=False)
+        except Exception as e:
+            print(f"[WARNING] Failed to get guideline pages from Firestore: {str(e)}")
+            # Fallback to MongoDB
+            try:
+                pages = get_guideline_pages_mongo(best_match["id"], include_base64=False)
+            except Exception as e2:
+                print(f"[WARNING] Failed to get guideline pages from MongoDB: {str(e2)}")
+                pages = []
 
         # If query parameter is provided, filter pages by content
         if query:
@@ -822,130 +872,203 @@ async def read_guideline_page(data):
     if not page_number:
         return json.dumps({"error": "No page number provided."})
 
-    # print("📖 Reading guideline page ->", data)
+    print(f"📖 Reading guideline page for brand '{brand_name}', page {page_number}")
 
     try:
         # Import necessary modules
         print("📦 Importing modules")
+        # Import both MongoDB and Firestore functions for backward compatibility
         from app.db.database import (
+            brand_guidelines_collection as brand_guidelines_collection_mongo,
+            guideline_pages_collection as guideline_pages_collection_mongo,
+            get_brand_guideline as get_brand_guideline_mongo,
+        )
+        from app.db.firestore import (
             brand_guidelines_collection,
             guideline_pages_collection,
+            get_brand_guideline,
+            get_guideline_page,
         )
-
-        print("✅ Imported database modules")
         from bson.objectid import ObjectId
-
-        print("✅ Imported ObjectId")
         import re
 
-        print("🔎 Trying to find exact match")
-        # First try an exact match
-        exact_match = brand_guidelines_collection.find_one({"brand_name": brand_name})
+        # Define a function to calculate string similarity for fuzzy matching
+        def calculate_string_similarity(str1, str2):
+            """Calculate similarity between two strings (0-1)"""
+            str1 = str1.lower()
+            str2 = str2.lower()
 
-        print("🎯 Found exact match:", exact_match)
+            if len(str1) == 0 or len(str2) == 0:
+                return 0.0
 
-        if exact_match:
-            # Found an exact match
-            best_match = exact_match
-            best_match["id"] = str(best_match["_id"])
-        else:
-            print("❓ No exact match found")
-            # Try a case-insensitive regex match
-            regex_pattern = f"^{re.escape(brand_name)}$"
-            print("🔍 Regex pattern:", regex_pattern)
-            regex_match = brand_guidelines_collection.find_one(
-                {"brand_name": {"$regex": regex_pattern, "$options": "i"}}
-            )
+            # Simple Levenshtein distance implementation
+            matrix = [
+                [0 for _ in range(len(str2) + 1)] for _ in range(len(str1) + 1)
+            ]
 
-            print("🔍 Regex match:", regex_match)
+            for i in range(len(str1) + 1):
+                matrix[i][0] = i
+            for j in range(len(str2) + 1):
+                matrix[0][j] = j
 
-            if regex_match:
-                # Found a case-insensitive match
-                best_match = regex_match
-                best_match["id"] = str(best_match["_id"])
+            for i in range(1, len(str1) + 1):
+                for j in range(1, len(str2) + 1):
+                    if str1[i - 1] == str2[j - 1]:
+                        matrix[i][j] = matrix[i - 1][j - 1]
+                    else:
+                        matrix[i][j] = min(
+                            matrix[i - 1][j] + 1,  # deletion
+                            matrix[i][j - 1] + 1,  # insertion
+                            matrix[i - 1][j - 1] + 1,  # substitution
+                        )
+
+            distance = matrix[len(str1)][len(str2)]
+            max_length = max(len(str1), len(str2))
+
+            return 1.0 - (distance / max_length)
+
+        # First try to find the brand guideline in Firestore
+        best_match = None
+        try:
+            print("🔎 Trying to find brand in Firestore")
+            # First try an exact match in Firestore
+            query = brand_guidelines_collection.where('brand_name', '==', brand_name).limit(1)
+            matches = list(query.stream())
+
+            if matches:
+                # Convert Firestore document to dict
+                best_match = matches[0].to_dict()
+                best_match["id"] = matches[0].id
+                print(f"✅ Found exact match in Firestore: {best_match.get('brand_name')}")
             else:
-                # Try a fuzzy match by getting all guidelines and calculating similarity
-                print("❓ No regex match found")
+                # Try a case-insensitive match (Firestore doesn't support regex directly)
+                # We'll get all guidelines and filter in Python
+                print("❓ No exact match found in Firestore, trying case-insensitive match")
+                all_guidelines_query = brand_guidelines_collection.limit(100)  # Limit to avoid too many results
+                all_guidelines = []
+                for doc in all_guidelines_query.stream():
+                    guideline = doc.to_dict()
+                    guideline["id"] = doc.id
+                    all_guidelines.append(guideline)
 
-                def calculate_string_similarity(str1, str2):
-                    """Calculate similarity between two strings (0-1)"""
-                    str1 = str1.lower()
-                    str2 = str2.lower()
+                # Try case-insensitive match
+                for guide in all_guidelines:
+                    if guide.get("brand_name", "").lower() == brand_name.lower():
+                        best_match = guide
+                        print(f"✅ Found case-insensitive match in Firestore: {best_match.get('brand_name')}")
+                        break
 
-                    if len(str1) == 0 or len(str2) == 0:
-                        return 0.0
+                # If still not found, try fuzzy matching
+                if not best_match:
+                    print("❓ No case-insensitive match found in Firestore, trying fuzzy match")
+                    best_similarity = 0.5  # Minimum similarity threshold
+                    for guide in all_guidelines:
+                        similarity = calculate_string_similarity(
+                            brand_name, guide.get("brand_name", "")
+                        )
+                        if similarity >= best_similarity:
+                            best_similarity = similarity
+                            best_match = guide
+                            print(f"✅ Found fuzzy match in Firestore: {best_match.get('brand_name')} (similarity: {best_similarity:.2f})")
+        except Exception as e:
+            print(f"⚠️ Error searching in Firestore: {str(e)}")
 
-                    # Simple Levenshtein distance implementation
-                    matrix = [
-                        [0 for _ in range(len(str2) + 1)] for _ in range(len(str1) + 1)
-                    ]
-
-                    for i in range(len(str1) + 1):
-                        matrix[i][0] = i
-                    for j in range(len(str2) + 1):
-                        matrix[0][j] = j
-
-                    for i in range(1, len(str1) + 1):
-                        for j in range(1, len(str2) + 1):
-                            if str1[i - 1] == str2[j - 1]:
-                                matrix[i][j] = matrix[i - 1][j - 1]
-                            else:
-                                matrix[i][j] = min(
-                                    matrix[i - 1][j] + 1,  # deletion
-                                    matrix[i][j - 1] + 1,  # insertion
-                                    matrix[i - 1][j - 1] + 1,  # substitution
-                                )
-
-                    distance = matrix[len(str1)][len(str2)]
-                    max_length = max(len(str1), len(str2))
-
-                    return 1.0 - (distance / max_length)
-
-                # Get all guidelines
-                all_guidelines = list(brand_guidelines_collection.find({}))
-
-                # Calculate similarity for each guideline
-                best_match = None
-                best_similarity = 0
-
-                for guideline in all_guidelines:
-                    similarity = calculate_string_similarity(
-                        brand_name, guideline.get("brand_name", "")
-                    )
-                    if similarity >= 0.5 and similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = guideline
-                        guideline["id"] = str(guideline["_id"])
-
-        # If no match found with at least 80% similarity
+        # If not found in Firestore, try MongoDB as fallback
         if not best_match:
-            print("❌ No match found")
+            try:
+                print("🔎 Trying to find brand in MongoDB")
+                # First try an exact match in MongoDB
+                exact_match = brand_guidelines_collection_mongo.find_one({"brand_name": brand_name})
+
+                if exact_match:
+                    # Found an exact match
+                    best_match = exact_match
+                    best_match["id"] = str(best_match["_id"])
+                    print(f"✅ Found exact match in MongoDB: {best_match.get('brand_name')}")
+                else:
+                    # Try a case-insensitive regex match
+                    print("❓ No exact match found in MongoDB, trying regex match")
+                    regex_pattern = f"^{re.escape(brand_name)}$"
+                    regex_match = brand_guidelines_collection_mongo.find_one(
+                        {"brand_name": {"$regex": regex_pattern, "$options": "i"}}
+                    )
+
+                    if regex_match:
+                        # Found a case-insensitive match
+                        best_match = regex_match
+                        best_match["id"] = str(best_match["_id"])
+                        print(f"✅ Found regex match in MongoDB: {best_match.get('brand_name')}")
+                    else:
+                        # Try a fuzzy match by getting all guidelines and calculating similarity
+                        print("❓ No regex match found in MongoDB, trying fuzzy match")
+                        all_guidelines = list(brand_guidelines_collection_mongo.find({}))
+
+                        # Calculate similarity for each guideline
+                        best_similarity = 0.5  # Minimum similarity threshold
+                        for guideline in all_guidelines:
+                            similarity = calculate_string_similarity(
+                                brand_name, guideline.get("brand_name", "")
+                            )
+                            if similarity >= best_similarity:
+                                best_similarity = similarity
+                                best_match = guideline
+                                best_match["id"] = str(best_match["_id"])
+                                print(f"✅ Found fuzzy match in MongoDB: {best_match.get('brand_name')} (similarity: {best_similarity:.2f})")
+            except Exception as e:
+                print(f"⚠️ Error searching in MongoDB: {str(e)}")
+
+        # If no match found
+        if not best_match:
+            print("❌ No brand match found in either database")
             return json.dumps(
                 {
                     "error": f"Brand guidelines for '{brand_name}' not found.",
-                    "available_brands": (
-                        [g.get("brand_name") for g in all_guidelines]
-                        if "all_guidelines" in locals()
-                        else []
-                    ),
+                    "available_brands": [],
                 }
             )
 
         # Now get the specific page by page number
-        page = guideline_pages_collection.find_one(
-            {"guideline_id": best_match["id"], "page_number": page_number}
-        )
+        page = None
 
+        # First try to get the page from Firestore
+        try:
+            print(f"🔎 Looking for page {page_number} in Firestore")
+            # Query Firestore for the page
+            page_query = guideline_pages_collection.where('guideline_id', '==', best_match["id"]).where('page_number', '==', page_number).limit(1)
+            page_matches = list(page_query.stream())
+
+            if page_matches:
+                # Convert Firestore document to dict
+                page = page_matches[0].to_dict()
+                page["id"] = page_matches[0].id
+                print(f"✅ Found page {page_number} in Firestore")
+        except Exception as e:
+            print(f"⚠️ Error getting page from Firestore: {str(e)}")
+
+        # If not found in Firestore, try MongoDB
         if not page:
-            print("❌ Page not found")
+            try:
+                print(f"🔎 Looking for page {page_number} in MongoDB")
+                # Query MongoDB for the page
+                page = guideline_pages_collection_mongo.find_one(
+                    {"guideline_id": best_match["id"], "page_number": page_number}
+                )
+
+                if page:
+                    page["id"] = str(page["_id"])
+                    print(f"✅ Found page {page_number} in MongoDB")
+            except Exception as e:
+                print(f"⚠️ Error getting page from MongoDB: {str(e)}")
+
+        # If page not found in either database
+        if not page:
+            print(f"❌ Page {page_number} not found for brand '{brand_name}'")
             return json.dumps(
                 {
                     "error": f"Page {page_number} not found in {brand_name} guidelines.",
                     "total_pages": best_match.get("total_pages", 0),
                 }
             )
-
-        page["id"] = str(page["_id"])
 
         # Format the response
         response = {
@@ -961,6 +1084,7 @@ async def read_guideline_page(data):
             "guideline_id": page.get("guideline_id"),
         }
 
+        print(f"✅ Successfully retrieved page {page_number} for brand '{brand_name}'")
         return json.dumps(response)
 
     except Exception as e:

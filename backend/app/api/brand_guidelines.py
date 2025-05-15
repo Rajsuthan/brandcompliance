@@ -21,7 +21,8 @@ from app.utils.background_tasks import create_page_processing_task, get_task_sta
 # In-memory progress tracking for guideline processing
 processing_progress = {}
 
-from app.core.auth import get_current_user
+# from app.core.auth import get_current_user
+from app.core.firebase_auth import get_current_user_compatibility as get_current_user
 from app.models.pdf import (
     BrandGuideline,
     BrandGuidelineCreate,
@@ -30,6 +31,16 @@ from app.models.pdf import (
     BrandGuidelineUploadResponse,
 )
 from app.db.database import (
+    create_brand_guideline as create_brand_guideline_mongo,
+    create_guideline_page as create_guideline_page_mongo,
+    get_brand_guideline as get_brand_guideline_mongo,
+    get_guideline_pages as get_guideline_pages_mongo,
+    get_guideline_page as get_guideline_page_mongo,
+    get_brand_guidelines_by_user as get_brand_guidelines_by_user_mongo,
+)
+
+# Import Firestore functions
+from app.db.firestore import (
     create_brand_guideline,
     create_guideline_page,
     get_brand_guideline,
@@ -86,7 +97,22 @@ async def upload_brand_guideline(
         "total_pages": total_pages,
         "description": description,
     }
-    guideline_id = create_brand_guideline(guideline_data)
+    # Create brand guideline record in Firestore
+    try:
+        guideline_id = create_brand_guideline(guideline_data)
+        print(f"[INFO] Created brand guideline in Firestore with ID: {guideline_id}")
+    except Exception as e:
+        print(f"[WARNING] Failed to create brand guideline in Firestore: {str(e)}")
+        # Fallback to MongoDB
+        try:
+            guideline_id = create_brand_guideline_mongo(guideline_data)
+            print(f"[INFO] Created brand guideline in MongoDB with ID: {guideline_id}")
+        except Exception as e2:
+            print(f"[ERROR] Failed to create brand guideline in MongoDB: {str(e2)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create brand guideline",
+            )
 
     from app.utils.pdf_to_image import pdf_to_image_fitz
     from app.utils.background_tasks import process_guideline_page
@@ -103,7 +129,7 @@ async def upload_brand_guideline(
         processed = 0
         for result in results:
             if result["success"]:
-                # Store page in database
+                # Store page in database 
                 page_data = {
                     "guideline_id": str(guideline_id),
                     "page_number": result["page"] + 1,
@@ -111,13 +137,38 @@ async def upload_brand_guideline(
                     "height": result["height"],
                     "base64": result.get("base64", None)
                 }
-                page_id = create_guideline_page(page_data)
+                # Create page record in Firestore
+                try:
+                    page_id = create_guideline_page(page_data)
+                    print(f"[INFO] Created guideline page in Firestore with ID: {page_id}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to create guideline page in Firestore: {str(e)}")
+                    # Fallback to MongoDB
+                    try:
+                        page_id = create_guideline_page_mongo(page_data)
+                        print(f"[INFO] Created guideline page in MongoDB with ID: {page_id}")
+                    except Exception as e2:
+                        print(f"[ERROR] Failed to create guideline page in MongoDB: {str(e2)}")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to create guideline page",
+                        )
                 # LLM processing
                 page_data_with_id = dict(page_data)
                 page_data_with_id["id"] = page_id
                 llm_result = await process_guideline_page(page_data_with_id)
-                from app.db.database import update_guideline_page_with_results
-                update_guideline_page_with_results(page_id, llm_result)
+                # Update page with results in Firestore
+                try:
+                    from app.db.firestore import update_guideline_page_with_results
+                    update_guideline_page_with_results(page_id, llm_result)
+                except Exception as e:
+                    print(f"[WARNING] Failed to update guideline page in Firestore: {str(e)}")
+                    # Fallback to MongoDB
+                    try:
+                        from app.db.database import update_guideline_page_with_results as update_guideline_page_with_results_mongo
+                        update_guideline_page_with_results_mongo(page_id, llm_result)
+                    except Exception as e2:
+                        print(f"[WARNING] Failed to update guideline page in MongoDB: {str(e2)}")
                 processed += 1
                 percent = int((processed / total_pages) * 100)
                 # Stream progress as JSON line
@@ -156,7 +207,19 @@ async def get_guideline_processing_progress(guideline_id: str):
 @router.get("/brand-guidelines", response_model=List[BrandGuideline])
 async def get_user_brand_guidelines(current_user: dict = Depends(get_current_user)):
     """Get all brand guidelines for the current user"""
-    guidelines = get_brand_guidelines_by_user(current_user["id"])
+    # Get all brand guidelines for the user from Firestore
+    try:
+        guidelines = get_brand_guidelines_by_user(current_user["id"])
+        print(f"[INFO] Retrieved {len(guidelines)} brand guidelines from Firestore")
+    except Exception as e:
+        print(f"[WARNING] Failed to get brand guidelines from Firestore: {str(e)}")
+        # Fallback to MongoDB
+        try:
+            guidelines = get_brand_guidelines_by_user_mongo(current_user["id"])
+            print(f"[INFO] Retrieved {len(guidelines)} brand guidelines from MongoDB")
+        except Exception as e2:
+            print(f"[ERROR] Failed to get brand guidelines from MongoDB: {str(e2)}")
+            guidelines = []
     return guidelines
 
 
@@ -165,7 +228,23 @@ async def get_brand_guideline_by_id(
     guideline_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Get a specific brand guideline by ID"""
-    guideline = get_brand_guideline(guideline_id)
+    # Get brand guideline from Firestore
+    try:
+        guideline = get_brand_guideline(guideline_id)
+        if guideline:
+            print(f"[INFO] Retrieved brand guideline from Firestore with ID: {guideline_id}")
+    except Exception as e:
+        print(f"[WARNING] Failed to get brand guideline from Firestore: {str(e)}")
+        guideline = None
+
+    # If not found in Firestore, try MongoDB
+    if not guideline:
+        try:
+            guideline = get_brand_guideline_mongo(guideline_id)
+            if guideline:
+                print(f"[INFO] Retrieved brand guideline from MongoDB with ID: {guideline_id}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get brand guideline from MongoDB: {str(e)}")
 
     if not guideline:
         raise HTTPException(
@@ -206,7 +285,19 @@ async def get_guideline_pages_by_guideline_id(
         )
 
     # Get the pages without base64 data to reduce response size
-    pages = get_guideline_pages(guideline_id, include_base64=False)
+    try:
+        # Try to get pages from Firestore
+        pages = get_guideline_pages(guideline_id, include_base64=False)
+        print(f"[INFO] Retrieved {len(pages)} guideline pages from Firestore")
+    except Exception as e:
+        print(f"[WARNING] Failed to get guideline pages from Firestore: {str(e)}")
+        # Fallback to MongoDB
+        try:
+            pages = get_guideline_pages_mongo(guideline_id, include_base64=False)
+            print(f"[INFO] Retrieved {len(pages)} guideline pages from MongoDB")
+        except Exception as e2:
+            print(f"[ERROR] Failed to get guideline pages from MongoDB: {str(e2)}")
+            pages = []
     return pages
 
 
@@ -217,8 +308,23 @@ async def get_guideline_page_by_id(
     page_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Get a specific brand guideline page by ID, including base64 data"""
-    # Get the page with base64 data
-    page = get_guideline_page(page_id, include_base64=True)
+    # Get the page with base64 data from Firestore
+    try:
+        page = get_guideline_page(page_id, include_base64=True)
+        if page:
+            print(f"[INFO] Retrieved guideline page from Firestore with ID: {page_id}")
+    except Exception as e:
+        print(f"[WARNING] Failed to get guideline page from Firestore: {str(e)}")
+        page = None
+
+    # If not found in Firestore, try MongoDB
+    if not page:
+        try:
+            page = get_guideline_page_mongo(page_id, include_base64=True)
+            if page:
+                print(f"[INFO] Retrieved guideline page from MongoDB with ID: {page_id}")
+        except Exception as e:
+            print(f"[ERROR] Failed to get guideline page from MongoDB: {str(e)}")
 
     if not page:
         raise HTTPException(

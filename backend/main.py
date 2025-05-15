@@ -4,6 +4,9 @@ import uvicorn
 from dotenv import load_dotenv
 import os
 import logging
+import json
+from fastapi.encoders import jsonable_encoder
+from app.utils.json_encoder import MongoJSONEncoder, mongo_json_serializer
 
 # Load environment variables from .env file
 load_dotenv()
@@ -12,7 +15,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from app.api import auth, items, brand_guidelines, compliance, video_upload
+# Initialize Firebase first to avoid multiple initializations
+from app.core.firebase_init import firebase_app
+
+# Import API modules
+from app.api import auth, items, brand_guidelines, compliance, video_upload, firebase_auth, user_profile
 
 # Import Redis startup module
 try:
@@ -34,7 +41,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up Compliance API...")
-    
+
     # Initialize Redis cache if available
     if redis_available:
         try:
@@ -46,13 +53,13 @@ async def startup_event():
                 logger.warning("Failed to initialize Redis cache. Continuing without caching.")
         except Exception as e:
             logger.exception(f"Error initializing Redis cache: {str(e)}")
-    
+
     logger.info("Compliance API startup complete")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down Compliance API...")
-    
+
     # Clean up Redis connections if available
     if redis_available:
         try:
@@ -64,7 +71,7 @@ async def shutdown_event():
                 logger.warning("Failed to close Redis connections cleanly")
         except Exception as e:
             logger.exception(f"Error closing Redis connections: {str(e)}")
-    
+
     logger.info("Compliance API shutdown complete")
 
 # Configure CORS
@@ -75,6 +82,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Override default JSON encoder
+fastapi_jsonable_encoder_original = jsonable_encoder
+
+def custom_jsonable_encoder(*args, **kwargs):
+    """Custom jsonable_encoder that handles MongoDB ObjectId"""
+    try:
+        return fastapi_jsonable_encoder_original(*args, **kwargs)
+    except ValueError as e:
+        # If standard encoder fails, try with our custom serializer
+        if args and isinstance(args[0], (dict, list)):
+            return json.loads(json.dumps(args[0], default=mongo_json_serializer))
+        raise e
+
+# Replace FastAPI's jsonable_encoder with our custom version
+jsonable_encoder = custom_jsonable_encoder
 
 
 # Root endpoint
@@ -89,6 +112,8 @@ async def health_check():
 
 # Include routers
 app.include_router(auth.router, tags=["authentication"])
+app.include_router(firebase_auth.router, prefix="/api/firebase-auth", tags=["firebase-authentication"])
+app.include_router(user_profile.router, prefix="/api/user", tags=["user-profile"])
 app.include_router(items.router, prefix="/api", tags=["items"])
 app.include_router(brand_guidelines.router, prefix="/api", tags=["brand-guidelines"])
 app.include_router(compliance.router, prefix="/api", tags=["compliance"])

@@ -25,7 +25,9 @@ from app.core.auth import get_current_user
 from app.core.agent.gemini_agent import GeminiAgent, encode_image_to_base64
 from app.core.agent.prompt import gemini_system_prompt
 from app.core.video_agent.video_agent_class import VideoAgent
-from app.db.database import create_feedback, get_user_feedback
+# Import both MongoDB and Firestore functions for backward compatibility
+from app.db.database import create_feedback as create_feedback_mongo, get_user_feedback as get_user_feedback_mongo
+from app.db.firestore import create_feedback, get_user_feedback
 
 router = APIRouter()
 
@@ -90,7 +92,19 @@ async def process_image_and_stream(
         await queue.put(data)
 
     # Get user feedback to include in the system prompt
-    user_feedback_list = get_user_feedback(user_id)
+    try:
+        # Try to get feedback from Firestore
+        user_feedback_list = get_user_feedback(user_id)
+        print(f"[INFO] Retrieved {len(user_feedback_list)} user feedback items from Firestore")
+    except Exception as e:
+        print(f"[WARNING] Failed to get user feedback from Firestore: {str(e)}")
+        # Fallback to MongoDB
+        try:
+            user_feedback_list = get_user_feedback_mongo(user_id)
+            print(f"[INFO] Retrieved {len(user_feedback_list)} user feedback items from MongoDB")
+        except Exception as e2:
+            print(f"[ERROR] Failed to get user feedback from MongoDB: {str(e2)}")
+            user_feedback_list = []
 
     # Prepare custom system prompt with user feedback if available
     custom_system_prompt = gemini_system_prompt
@@ -265,16 +279,42 @@ async def submit_feedback(
     Submit user feedback for the compliance system.
     """
     try:
-        feedback_id = create_feedback(
-            user_id=current_user["id"],
-            content=feedback.content,
-        )
+        # Create feedback in Firestore
+        feedback_data = {
+            "user_id": current_user["id"],
+            "content": feedback.content,
+        }
+        feedback_id = create_feedback(feedback_data)
+        print(f"[INFO] Created feedback in Firestore with ID: {feedback_id}")
+
+        # Also store in MongoDB for backward compatibility
+        try:
+            mongo_feedback_id = create_feedback_mongo(
+                user_id=current_user["id"],
+                content=feedback.content,
+            )
+            print(f"[INFO] Created feedback in MongoDB with ID: {mongo_feedback_id}")
+        except Exception as mongo_error:
+            print(f"[WARNING] Failed to create feedback in MongoDB: {str(mongo_error)}")
+
         return {"id": feedback_id, "status": "success"}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error submitting feedback: {str(e)}",
-        )
+        print(f"[ERROR] Failed to create feedback in Firestore: {str(e)}")
+
+        # Fallback to MongoDB
+        try:
+            mongo_feedback_id = create_feedback_mongo(
+                user_id=current_user["id"],
+                content=feedback.content,
+            )
+            print(f"[INFO] Created feedback in MongoDB with ID: {mongo_feedback_id}")
+            return {"id": str(mongo_feedback_id), "status": "success"}
+        except Exception as mongo_error:
+            print(f"[ERROR] Failed to create feedback in MongoDB: {str(mongo_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error submitting feedback: {str(e)}",
+            )
 
 @router.get("/compliance/feedback")
 async def get_feedback(
@@ -284,10 +324,21 @@ async def get_feedback(
     Get all feedback submitted by the current user.
     """
     try:
+        # Get feedback from Firestore
         feedback_list = get_user_feedback(current_user["id"])
+        print(f"[INFO] Retrieved {len(feedback_list)} feedback items from Firestore")
         return {"feedback": feedback_list, "status": "success"}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting feedback: {str(e)}",
-        )
+        print(f"[WARNING] Failed to get feedback from Firestore: {str(e)}")
+
+        # Fallback to MongoDB
+        try:
+            feedback_list = get_user_feedback_mongo(current_user["id"])
+            print(f"[INFO] Retrieved {len(feedback_list)} feedback items from MongoDB")
+            return {"feedback": feedback_list, "status": "success"}
+        except Exception as mongo_error:
+            print(f"[ERROR] Failed to get feedback from MongoDB: {str(mongo_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error getting feedback: {str(e)}",
+            )

@@ -34,9 +34,45 @@ users_collection = db.users
 brand_guidelines_collection = db.brand_guidelines
 guideline_pages_collection = db.guideline_pages
 feedback_collection = db.feedback
+compliance_analysis_collection = db.compliance_analysis
 
 
 # Helper functions for database operations
+
+def convert_mongo_doc_to_json(doc):
+    """
+    Convert MongoDB document to JSON-serializable format
+
+    Args:
+        doc: MongoDB document
+
+    Returns:
+        dict: JSON-serializable dictionary
+    """
+    if doc is None:
+        return None
+
+    from bson.objectid import ObjectId
+    import json
+
+    # Convert ObjectId to string
+    if "_id" in doc and isinstance(doc["_id"], ObjectId):
+        doc["id"] = str(doc["_id"])
+
+    # Handle nested documents
+    for key, value in list(doc.items()):
+        if isinstance(value, ObjectId):
+            doc[key] = str(value)
+        elif isinstance(value, dict):
+            doc[key] = convert_mongo_doc_to_json(value)
+        elif isinstance(value, list):
+            doc[key] = [
+                convert_mongo_doc_to_json(item) if isinstance(item, dict) else
+                str(item) if isinstance(item, ObjectId) else item
+                for item in value
+            ]
+
+    return doc
 def create_brand_guideline(guideline_data):
     """Create a new brand guideline record in the database"""
     guideline_data["created_at"] = datetime.utcnow()
@@ -60,8 +96,8 @@ def get_brand_guideline(guideline_id):
         {"_id": ObjectId(guideline_id)}
     )
     if guideline_data:
-        guideline_data["id"] = str(guideline_data["_id"])
-        return guideline_data
+        # Convert MongoDB document to JSON-serializable format
+        return convert_mongo_doc_to_json(guideline_data)
     return None
 
 
@@ -80,8 +116,9 @@ def get_guideline_pages(guideline_id, include_base64=False):
     # Convert cursor to list and add id field
     pages = []
     for page in cursor:
-        page["id"] = str(page["_id"])
-        pages.append(page)
+        # Convert MongoDB document to JSON-serializable format
+        json_page = convert_mongo_doc_to_json(page)
+        pages.append(json_page)
 
     return pages
 
@@ -98,8 +135,8 @@ def get_guideline_page(page_id, include_base64=False):
     )
 
     if page_data:
-        page_data["id"] = str(page_data["_id"])
-        return page_data
+        # Convert MongoDB document to JSON-serializable format
+        return convert_mongo_doc_to_json(page_data)
     return None
 
 
@@ -109,8 +146,9 @@ def get_brand_guidelines_by_user(user_id):
 
     guidelines = []
     for guideline in cursor:
-        guideline["id"] = str(guideline["_id"])
-        guidelines.append(guideline)
+        # Convert MongoDB document to JSON-serializable format
+        json_guideline = convert_mongo_doc_to_json(guideline)
+        guidelines.append(json_guideline)
 
     return guidelines
 
@@ -127,6 +165,9 @@ def update_guideline_page_with_results(page_id, results):
         Updated page data or None if page not found
     """
     from bson.objectid import ObjectId
+
+    # Convert any ObjectId in results to string
+    results = convert_mongo_doc_to_json(results)
 
     # Create update data with processing results
     update_data = {
@@ -164,7 +205,39 @@ def get_user_feedback(user_id):
 
     feedback_list = []
     for feedback in cursor:
-        feedback["id"] = str(feedback["_id"])
-        feedback_list.append(feedback)
+        # Convert MongoDB document to JSON-serializable format
+        json_feedback = convert_mongo_doc_to_json(feedback)
+        feedback_list.append(json_feedback)
 
     return feedback_list
+
+
+def create_compliance_analysis(analysis_data):
+    """Create a new compliance analysis record in the database"""
+    analysis_data["created_at"] = datetime.utcnow()
+    result = compliance_analysis_collection.insert_one(analysis_data)
+    return str(result.inserted_id)
+
+
+def get_compliance_analysis(analysis_id):
+    """Get a compliance analysis by ID"""
+    from bson.objectid import ObjectId
+
+    analysis = compliance_analysis_collection.find_one({"_id": ObjectId(analysis_id)})
+    if analysis:
+        # Convert MongoDB document to JSON-serializable format
+        return convert_mongo_doc_to_json(analysis)
+    return None
+
+
+def get_user_compliance_analyses(user_id):
+    """Get all compliance analyses for a user"""
+    cursor = compliance_analysis_collection.find({"user_id": user_id}).sort("created_at", -1)
+
+    analyses = []
+    for analysis in cursor:
+        # Convert MongoDB document to JSON-serializable format
+        json_analysis = convert_mongo_doc_to_json(analysis)
+        analyses.append(json_analysis)
+
+    return analyses

@@ -10,7 +10,8 @@ from app.core.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from app.models.user import User, UserCreate, Token, LoginRequest
-from app.db.database import users_collection
+from app.db.database import users_collection as users_collection_mongo
+from app.db.firestore import users_collection
 from bson import ObjectId
 
 router = APIRouter()
@@ -18,21 +19,60 @@ router = APIRouter()
 
 @router.post("/signup", response_model=User)
 async def signup(user: UserCreate):
-    # Check if user already exists
-    db_user = users_collection.find_one({"username": user.username})
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
+    try:
+        # Check if user already exists in Firestore
+        query = users_collection.where('username', '==', user.username).limit(1)
+        existing_users = list(query.stream())
 
-    # Create new user
-    hashed_password = get_password_hash(user.password)
-    user_data = user.model_dump()
-    user_data.pop("password")
-    user_data["hashed_password"] = hashed_password
+        if existing_users:
+            raise HTTPException(status_code=400, detail="Username already registered")
 
-    result = users_collection.insert_one(user_data)
-    user_data["id"] = str(result.inserted_id)
+        # Create new user
+        hashed_password = get_password_hash(user.password)
+        user_data = user.model_dump()
+        user_data.pop("password")
+        user_data["hashed_password"] = hashed_password
 
-    return user_data
+        # Add timestamps
+        from firebase_admin import firestore
+        user_data['created_at'] = firestore.SERVER_TIMESTAMP
+
+        # Create user in Firestore
+        doc_ref = users_collection.document()
+        doc_ref.set(user_data)
+        user_data["id"] = doc_ref.id
+
+        print(f"[INFO] Created user in Firestore with ID: {doc_ref.id}")
+        return user_data
+    except Exception as e:
+        print(f"[WARNING] Failed to create user in Firestore: {str(e)}")
+
+        # Fallback to MongoDB
+        try:
+            # Check if user already exists in MongoDB
+            db_user = users_collection_mongo.find_one({"username": user.username})
+            if db_user:
+                raise HTTPException(status_code=400, detail="Username already registered")
+
+            # Create new user in MongoDB
+            hashed_password = get_password_hash(user.password)
+            user_data = user.model_dump()
+            user_data.pop("password")
+            user_data["hashed_password"] = hashed_password
+
+            result = users_collection_mongo.insert_one(user_data)
+            user_data["id"] = str(result.inserted_id)
+
+            print(f"[INFO] Created user in MongoDB with ID: {result.inserted_id}")
+            return user_data
+        except HTTPException:
+            raise
+        except Exception as e2:
+            print(f"[ERROR] Failed to create user in MongoDB: {str(e2)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create user: {str(e2)}"
+            )
 
 
 @router.post("/token", response_model=Token)

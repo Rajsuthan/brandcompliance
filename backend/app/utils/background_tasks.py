@@ -14,7 +14,9 @@ import multiprocessing
 from datetime import datetime
 from app.core.agent.llm import llm
 from app.utils.pdf_to_image import pdf_to_image_fitz, pdf_to_image
-from app.db.database import create_guideline_page
+# Import both MongoDB and Firestore functions for backward compatibility
+from app.db.database import create_guideline_page as create_guideline_page_mongo
+from app.db.firestore import create_guideline_page
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -172,11 +174,23 @@ async def run_background_task(task_id: str, func: Callable, *args, **kwargs) -> 
 
         # Update the page in the database with the processing results
         if isinstance(result, dict) and "page_id" in result:
-            from app.db.database import update_guideline_page_with_results
-
             page_id = result["page_id"]
-            updated_page = update_guideline_page_with_results(page_id, result)
-            logger.info(f"Updated page {page_id} with processing results")
+
+            try:
+                # Try to update page in Firestore
+                from app.db.firestore import update_guideline_page_with_results
+                updated_page = update_guideline_page_with_results(page_id, result)
+                logger.info(f"Updated page {page_id} with processing results in Firestore")
+            except Exception as e:
+                logger.warning(f"Failed to update page in Firestore: {str(e)}")
+
+                # Fallback to MongoDB
+                try:
+                    from app.db.database import update_guideline_page_with_results as update_guideline_page_with_results_mongo
+                    updated_page = update_guideline_page_with_results_mongo(page_id, result)
+                    logger.info(f"Updated page {page_id} with processing results in MongoDB")
+                except Exception as mongo_error:
+                    logger.error(f"Failed to update page in MongoDB: {str(mongo_error)}")
 
         logger.info(f"Task {task_id} completed successfully")
 
@@ -203,7 +217,7 @@ async def process_pdf_batch(
     """
     Process all pages of a PDF in parallel using PyMuPDF.
     This is much faster than processing pages individually.
-    
+
     Args:
         guideline_id: ID of the brand guideline
         pdf_path: Path to the PDF file
@@ -211,24 +225,24 @@ async def process_pdf_batch(
         include_base64: Whether to include base64 encoding of the images
         dpi: DPI for the output images
         max_workers: Maximum number of worker processes
-        
+
     Returns:
         Dictionary with processing results
     """
     logger.info(f"Starting batch processing of PDF with {total_pages} pages")
     start_time = time.time()
-    
+
     # Use PyMuPDF for faster processing if available
     # Set max workers based on CPU cores and page count
     if max_workers is None:
         max_workers = min(multiprocessing.cpu_count(), 8)
-        
+
     # For small PDFs, use fewer workers
     if total_pages < max_workers:
         max_workers = max(1, total_pages)
-        
+
     logger.info(f"Using pdf_to_image with {max_workers} workers")
-        
+
     # Process all pages in parallel
     results = pdf_to_image(
         pdf_path=pdf_path,
@@ -237,14 +251,14 @@ async def process_pdf_batch(
         max_workers=max_workers,
         verbose=True
     )
-        
+
     # Store pages in batches to avoid memory issues
     batch_size = 5  # Process 5 pages at a time
     total_processed = 0
-        
+
     for i in range(0, len(results), batch_size):
         batch = results[i:i+batch_size]
-            
+
         for result in batch:
             if result["success"]:
                 # Store page in database
@@ -255,29 +269,55 @@ async def process_pdf_batch(
                     "height": result["height"],
                     "base64": result.get("base64", None)
                 }
-                    
-                # Create page in database
-                page_id = create_guideline_page(page_data)
+
+                # Create page in Firestore
+                try:
+                    page_id = create_guideline_page(page_data)
+                    logger.info(f"Created guideline page in Firestore with ID: {page_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create guideline page in Firestore: {str(e)}")
+
+                    # Fallback to MongoDB
+                    try:
+                        page_id = create_guideline_page_mongo(page_data)
+                        logger.info(f"Created guideline page in MongoDB with ID: {page_id}")
+                    except Exception as mongo_error:
+                        logger.error(f"Failed to create guideline page in MongoDB: {str(mongo_error)}")
+                        raise
                 total_processed += 1
 
                 # Call LLM to process the page and generate tags/summary
-                from app.db.database import update_guideline_page_with_results
                 page_data_with_id = dict(page_data)
                 page_data_with_id["id"] = page_id
                 llm_result = await process_guideline_page(page_data_with_id)
-                update_guideline_page_with_results(page_id, llm_result)
-                    
+
+                # Update page with results in Firestore
+                try:
+                    from app.db.firestore import update_guideline_page_with_results
+                    update_guideline_page_with_results(page_id, llm_result)
+                    logger.info(f"Updated page {page_id} with processing results in Firestore")
+                except Exception as e:
+                    logger.warning(f"Failed to update page in Firestore: {str(e)}")
+
+                    # Fallback to MongoDB
+                    try:
+                        from app.db.database import update_guideline_page_with_results as update_guideline_page_with_results_mongo
+                        update_guideline_page_with_results_mongo(page_id, llm_result)
+                        logger.info(f"Updated page {page_id} with processing results in MongoDB")
+                    except Exception as mongo_error:
+                        logger.error(f"Failed to update page in MongoDB: {str(mongo_error)}")
+
         # Log progress
         progress = (i + len(batch)) / len(results) * 100
         logger.info(f"Processed {i + len(batch)}/{len(results)} pages ({progress:.1f}%)")
-            
+
     elapsed = time.time() - start_time
     pages_per_second = total_processed / elapsed
     logger.info(
         f"Completed batch processing: {total_processed}/{total_pages} pages in {elapsed:.2f}s "
         f"({pages_per_second:.2f} pages/sec)"
     )
-        
+
     # Clean up the temporary PDF file after processing
     try:
         import os
@@ -326,13 +366,13 @@ def create_page_processing_task(
         logger.info(f"Creating batch processing task for PDF with {total_pages} pages")
         asyncio.create_task(
             run_background_task(
-                task_id, 
-                process_pdf_batch, 
-                guideline_id, 
-                pdf_path, 
-                total_pages, 
-                include_base64, 
-                dpi, 
+                task_id,
+                process_pdf_batch,
+                guideline_id,
+                pdf_path,
+                total_pages,
+                include_base64,
+                dpi,
                 max_workers
             )
         )

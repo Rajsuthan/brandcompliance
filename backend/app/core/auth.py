@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 import os
 
 from app.models.user import TokenData
-from app.db.database import users_collection
+from app.db.database import users_collection as users_collection_mongo
+# Import Firestore users collection
+from app.db.firestore import users_collection
 
 # Load environment variables
 load_dotenv()
@@ -35,10 +37,29 @@ def get_password_hash(password):
 
 
 def get_user(username: str):
-    user_data = users_collection.find_one({"username": username})
-    if user_data:
-        user_data["id"] = str(user_data["_id"])
-        return user_data
+    # Try to get user from Firestore first
+    try:
+        # Query Firestore for the user
+        query = users_collection.where('username', '==', username).limit(1)
+        users = list(query.stream())
+
+        if users:
+            # Convert Firestore document to dict
+            user_data = users[0].to_dict()
+            user_data["id"] = users[0].id
+            return user_data
+    except Exception as e:
+        print(f"[WARNING] Failed to get user from Firestore: {str(e)}")
+
+    # Fallback to MongoDB during migration
+    try:
+        user_data = users_collection_mongo.find_one({"username": username})
+        if user_data:
+            user_data["id"] = str(user_data["_id"])
+            return user_data
+    except Exception as e:
+        print(f"[WARNING] Failed to get user from MongoDB: {str(e)}")
+
     return None
 
 

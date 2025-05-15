@@ -21,11 +21,17 @@ from uuid import uuid4
 import asyncio
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user
+from app.core.firebase_auth import get_current_user_compatibility as get_current_user
 from app.core.agent.index import Agent, encode_image_to_base64
 from app.core.agent.prompt import system_prompt, gemini_system_prompt
 from app.core.video_agent.video_agent_class import VideoAgent
-from app.db.database import create_feedback, get_user_feedback
+# Import MongoDB database functions (will be replaced with Firestore)
+from app.db.database import create_feedback as create_feedback_mongo, get_user_feedback as get_user_feedback_mongo
+from app.db.database import create_compliance_analysis as create_compliance_analysis_mongo, get_user_compliance_analyses as get_user_compliance_analyses_mongo, get_compliance_analysis as get_compliance_analysis_mongo
+
+# Import Firestore database functions
+from app.db.firestore import create_feedback, get_user_feedback, log_compliance_check, get_compliance_analysis, get_user_compliance_analyses, create_compliance_analysis, get_user_usage, get_brand_guidelines_by_user
+from app.utils.compliance_extractor import extract_brand_and_score
 
 import re
 import xmltodict
@@ -37,8 +43,10 @@ router = APIRouter()
 async def check_image_compliance(
     file: UploadFile = File(...),
     text: Optional[str] = Form("Analyze this image for brand compliance."),
+    brand_name: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
+    print(f"[DEBUG] check_image_compliance: Received request with current_user: {current_user}")
     import inspect
     import time
     start_time = time.time()
@@ -73,6 +81,7 @@ async def check_image_compliance(
         temp_file_path = temp_file.name
 
     try:
+
         print(f"\033[92m[LOG] check_image_compliance: Encoding image to base64 (line {inspect.currentframe().f_lineno})\033[0m")
         # Get the base64 encoding of the image
         image_base64, media_type = encode_image_to_base64(temp_file_path)
@@ -88,6 +97,8 @@ async def check_image_compliance(
                 media_type=media_type,
                 text=text,
                 user_id=current_user["id"],
+                filename=file.filename,
+                brand_name=brand_name,
             ),
             media_type="text/event-stream",
         )
@@ -110,8 +121,10 @@ async def check_image_compliance(
 
 import inspect
 async def process_image_and_stream(
-    image_base64: str, media_type: str, text: str, user_id: str
+    image_base64: str, media_type: str, text: str, user_id: str, filename: str = None, brand_name: str = None
 ):
+    # Initialize a list to collect agent messages
+    agent_messages = []
     print(f"[LOG] process_image_and_stream: Start (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: Using model: anthropic/claude-3-7-sonnet-20250219 (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_image_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
@@ -166,16 +179,16 @@ async def process_image_and_stream(
     # Claude is better suited for image compliance analysis with its ability to detect visual details
     print(f"[LOG] process_image_and_stream: Instantiating OpenRouterNativeAgent with Claude 3.7 (line {inspect.currentframe().f_lineno})")
     from app.core.openrouter_agent.native_agent import OpenRouterAgent as OpenRouterNativeAgent
-    
+
     # Get the OpenRouter API key from environment variables
     import os
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     if not OPENROUTER_API_KEY:
         print(f"\033[91m[ERROR] OPENROUTER_API_KEY not found in environment variables\033[0m")
         raise ValueError("OPENROUTER_API_KEY environment variable is required")
-    
+
     print(f"\033[94m[INFO] Using OpenRouter API key: {OPENROUTER_API_KEY[:5]}...\033[0m")
-    
+
     # Note: The OpenRouterNativeAgent uses OPENROUTER_TIMEOUT internally, so we don't pass timeout here
     agent = OpenRouterNativeAgent(
         api_key=OPENROUTER_API_KEY,  # Required parameter
@@ -192,9 +205,9 @@ async def process_image_and_stream(
         if image_base64.startswith("data:image/"):
             # Extract only the base64 portion if it includes the data URL prefix
             image_base64 = image_base64.split(",")[1]
-        
+
         print(f"[DEBUG] Image base64 length: {len(image_base64)} characters")
-        
+
         processing_task = asyncio.create_task(
             agent.process(
                 user_prompt=text,
@@ -224,7 +237,7 @@ async def process_image_and_stream(
                 # Process data from the native agent implementation
                 event_type = data.get("type")
                 print(f"[LOG] process_image_and_stream: Received event_type: {event_type} (line {inspect.currentframe().f_lineno})")
-                
+
                 # Handle text events - these come directly from the model
                 if event_type == "text":
                     # If we were buffering a tool, yield it now
@@ -241,7 +254,10 @@ async def process_image_and_stream(
 
                     content = data["content"]
                     print(f"[LOG] process_image_and_stream: Handling text content: {content} (line {inspect.currentframe().f_lineno})")
-                    
+
+                    # Store agent message
+                    agent_messages.append(content)
+
                     # With native agent, we don't need to parse XML anymore
                     # Simply pass through the text content
                     event_data = f"data: text:{content}\n\n"
@@ -251,11 +267,11 @@ async def process_image_and_stream(
                 elif event_type == "tool":
                     # With the native implementation, tool events are properly formatted JSON
                     print(f"[LOG] process_image_and_stream: Processing tool event (line {inspect.currentframe().f_lineno})")
-                    
+
                     # Extract the tool details
                     tool_content = data.get("content", "{}")
                     print(f"[LOG] process_image_and_stream: Tool content type: {type(tool_content)} (line {inspect.currentframe().f_lineno})")
-                    
+
                     # If it's a string, try to parse it as JSON
                     if isinstance(tool_content, str):
                         try:
@@ -264,11 +280,11 @@ async def process_image_and_stream(
                         except Exception as e:
                             print(f"[LOG] process_image_and_stream: Failed to parse tool_content as JSON: {e} (line {inspect.currentframe().f_lineno})")
                             # Use as is if it's not valid JSON
-                    
+
                     # Check if this is an attempt_completion tool - special handling for completion status
                     tool_name = tool_content.get("tool_name") if isinstance(tool_content, dict) else None
                     print(f"[LOG] process_image_and_stream: Tool name: {tool_name} (line {inspect.currentframe().f_lineno})")
-                    
+
                     # Forward the tool event to the client
                     event_data = f"data: tool:{json.dumps(tool_content) if isinstance(tool_content, dict) else tool_content}\n\n"
                     print(f"[LOG] process_image_and_stream: Yielding tool event_data: {event_data.strip()} (line {inspect.currentframe().f_lineno})")
@@ -291,7 +307,7 @@ async def process_image_and_stream(
                     # with compliance_status, detailed_report, and summary
                     final_answer = data.get("content", "")
                     print(f"[LOG] process_image_and_stream: Processing complete event with content type: {type(final_answer)} (line {inspect.currentframe().f_lineno})")
-                    
+
                     # If it's a string, try to parse it as JSON (in case it's serialized)
                     if isinstance(final_answer, str):
                         try:
@@ -303,15 +319,69 @@ async def process_image_and_stream(
                         except Exception as e:
                             print(f"[LOG] process_image_and_stream: Content is not JSON: {e} (line {inspect.currentframe().f_lineno})")
                             # Use as is if parsing fails
-                    
+
                     # Format the completion event based on content type
                     if isinstance(final_answer, dict):
                         # Our native agent returns a structured response
+
+                        # Store the compliance analysis results in the database
+                        try:
+                            # Get the complete conversation history from the agent's message handler
+                            complete_conversation = []
+                            try:
+                                # Access the agent's message handler to get the complete conversation history
+                                if hasattr(agent, 'message_handler') and hasattr(agent.message_handler, 'messages'):
+                                    complete_conversation = agent.message_handler.messages
+                                    print(f"[LOG] process_image_and_stream: Retrieved {len(complete_conversation)} messages from agent's message handler")
+                                else:
+                                    print(f"[WARNING] process_image_and_stream: Could not access agent's message handler")
+                            except Exception as e:
+                                print(f"[ERROR] process_image_and_stream: Error accessing agent's message handler: {str(e)}")
+
+                            # Extract brand name and compliance score from the final report
+                            print(f"[LOG] process_image_and_stream: Extracting brand name and compliance score from final report (line {inspect.currentframe().f_lineno})")
+                            extracted_brand_name, extracted_compliance_score = await extract_brand_and_score(final_answer)
+                            print(f"[LOG] process_image_and_stream: Extracted brand name: {extracted_brand_name}, compliance score: {extracted_compliance_score} (line {inspect.currentframe().f_lineno})")
+
+                            # Use extracted values or fallback to provided/default values
+                            final_brand_name = extracted_brand_name if extracted_brand_name != "Unknown" else brand_name
+                            final_compliance_score = extracted_compliance_score if extracted_compliance_score > 0 else final_answer.get("compliance_score", 0)
+
+                            # Create analysis data with user ID
+                            analysis_data = {
+                                "user_id": user_id,
+                                "type": "image",
+                                "filename": filename,
+                                "brand_name": final_brand_name,
+                                "results": final_answer,
+                                "compliance_score": final_compliance_score,
+                                "media_type": media_type,
+                                "agent_messages": agent_messages,  # Store the agent's streamed messages
+                                "complete_conversation": complete_conversation  # Store the complete conversation history
+                            }
+
+                            # Store in database
+                            analysis_id = create_compliance_analysis(analysis_data)
+                            print(f"[LOG] process_image_and_stream: Stored compliance analysis with ID: {analysis_id} (line {inspect.currentframe().f_lineno})")
+
+                            # Log usage tracking with the analysis ID
+                            try:
+                                tracking_id = log_compliance_check(user_id, "image", None, analysis_id)
+                                print(f"[LOG] process_image_and_stream: Logged usage tracking with ID: {tracking_id} and analysis_id: {analysis_id} (line {inspect.currentframe().f_lineno})")
+                            except Exception as tracking_error:
+                                print(f"[WARNING] process_image_and_stream: Failed to log usage tracking: {tracking_error} (line {inspect.currentframe().f_lineno})")
+
+                            # Add analysis_id to the response
+                            final_answer["analysis_id"] = analysis_id
+                        except Exception as e:
+                            print(f"[ERROR] process_image_and_stream: Failed to store compliance analysis: {e} (line {inspect.currentframe().f_lineno})")
+                            # Continue even if storage fails
+
                         event_data = f"data: complete:{json.dumps(final_answer)}\n\n"
                     else:
                         # Just a string - pass as is
                         event_data = f"data: complete:{final_answer}\n\n"
-                    
+
                     print(f"[LOG] process_image_and_stream: Yielding complete event_data: {event_data.strip()[:200]}... (line {inspect.currentframe().f_lineno})")
                     yield event_data
                     break
@@ -455,6 +525,7 @@ async def check_video_compliance(
         )
 
     try:
+
         # Create a streaming response
         return StreamingResponse(
             process_video_frames_and_stream(
@@ -478,6 +549,8 @@ async def check_video_compliance(
 async def process_video_frames_and_stream(
     video_url: str, message: str, analysis_modes: List[str], user_id: str, brand_name: str = None
 ):
+    # Initialize a list to collect agent messages
+    agent_messages = []
     """
     Process a video using the native agent implementation with frames extraction.
     This function is similar to process_image_and_stream but handles video frames.
@@ -495,7 +568,7 @@ async def process_video_frames_and_stream(
     import inspect
     import json
     import time
-    
+
     print(f"[LOG] process_video_frames_and_stream: Start (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_video_frames_and_stream: Using model: anthropic/claude-3-7-sonnet (line {inspect.currentframe().f_lineno})")
     print(f"[LOG] process_video_frames_and_stream: user_id: {user_id} (line {inspect.currentframe().f_lineno})")
@@ -519,13 +592,13 @@ async def process_video_frames_and_stream(
 
     # Prepare custom system prompt with user feedback if available
     custom_system_prompt = gemini_system_prompt
-    
+
     # Add brand name information to system prompt if provided
     if brand_name:
         print(f"\n🏷️ [BRAND INFO] Analyzing compliance for brand: {brand_name}")
         brand_section = f"\n\n<Brand Information> !IMPORTANT!\nYou are analyzing content for the {brand_name} brand. Focus your analysis specifically on {brand_name}'s brand guidelines, visual identity, verbal identity, and overall compliance standards. When checking logos, colors, typography, and messaging, pay special attention to {brand_name}'s specific requirements and standards.\n"
         custom_system_prompt += brand_section
-    
+
     if user_feedback_list and len(user_feedback_list) > 0:
         print(
             f"\n🧠 [USER MEMORIES] Found {len(user_feedback_list)} feedback items for user {user_id}"
@@ -548,37 +621,37 @@ async def process_video_frames_and_stream(
 
     # Download video and extract frames
     print(f"[LOG] process_video_frames_and_stream: Downloading video from {video_url} (line {inspect.currentframe().f_lineno})")
-    
+
     # Import video processing functions
     from app.core.video_agent.gemini_llm import extract_frames
     from app.core.video_agent.video_agent_class import download_video
-    
+
     # Download the video
     try:
         # First yield a status event to inform the client that download is in progress
         yield "data: status:Downloading video file...\n\n"
-        
+
         # Download the video to a temporary file
         video_path_tuple = await download_video(video_url)
         video_path = video_path_tuple[0]  # Get the path to the downloaded video
-        
+
         # Yield status update
         yield "data: status:Extracting video frames for analysis...\n\n"
-        
+
         # Extract frames from the video (with a reasonable interval to avoid too many frames)
         frames = await extract_frames(video_path, initial_interval=1.0)  # Extract a frame every 3 seconds
-        
+
         print(f"[LOG] process_video_frames_and_stream: Extracted {len(frames)} frames from video (line {inspect.currentframe().f_lineno})")
-        
+
         # Convert frames to base64 format for the OpenRouterNativeAgent
         frame_base64_list = []
         for frame in frames:
             if 'base64' in frame:  # Fix: use 'base64' key which is what extract_frames produces
                 # The image data is already in base64 format from the extract_frames function
                 frame_base64_list.append(frame['base64'])
-                
+
         print(f"[LOG] process_video_frames_and_stream: Prepared {len(frame_base64_list)} frame images for analysis (line {inspect.currentframe().f_lineno})")
-        
+
         # Choose a reasonable subset of frames if there are too many (e.g., max 10 frames)
         max_frames = 10
         if len(frame_base64_list) > max_frames:
@@ -586,13 +659,13 @@ async def process_video_frames_and_stream(
             step = len(frame_base64_list) // max_frames
             frame_base64_list = frame_base64_list[::step][:max_frames]
             print(f"[LOG] process_video_frames_and_stream: Reduced to {len(frame_base64_list)} representative frames (line {inspect.currentframe().f_lineno})")
-        
+
     except Exception as e:
         error_msg = f"Error downloading or processing video: {str(e)}"
         print(f"\033[91m[ERROR] {error_msg}\033[0m")
         yield f"data: error:{error_msg}\n\n"
         return
-    
+
     # Get the OpenRouter API key from environment variables
     import os
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -600,11 +673,11 @@ async def process_video_frames_and_stream(
         print(f"\033[91m[ERROR] OPENROUTER_API_KEY not found in environment variables\033[0m")
         yield "data: error:OpenRouter API key not configured\n\n"
         return
-    
+
     # Create an OpenRouterNativeAgent instance using our native implementation with Claude 3.7 Sonnet
     print(f"[LOG] process_video_frames_and_stream: Instantiating OpenRouterNativeAgent with Claude 3.7 (line {inspect.currentframe().f_lineno})")
     from app.core.openrouter_agent.native_agent import OpenRouterAgent as OpenRouterNativeAgent
-    
+
     agent = OpenRouterNativeAgent(
         api_key=OPENROUTER_API_KEY,
         model="anthropic/claude-3-7-sonnet",  # Using Claude 3.7 Sonnet for improved compliance analysis
@@ -617,14 +690,14 @@ async def process_video_frames_and_stream(
     try:
         # Prepare a prompt that explains we're analyzing video frames
         enhanced_prompt = f"{message}\n\nThis is a video analysis task. I'm providing {len(frame_base64_list)} key frames extracted from the video. Please analyze these frames for brand compliance, paying attention to logo usage, colors, typography, placement, and overall visual identity compliance.".strip()
-        
+
         # Yield status update to client
         yield "data: status:Analyzing video frames for brand compliance...\n\n"
-        
+
         # Start the analysis with the frame images
         if frame_base64_list:
             print(f"[LOG] process_video_frames_and_stream: Starting analysis with {len(frame_base64_list)} frames (line {inspect.currentframe().f_lineno})")
-            
+
             # We'll use the frames property of the native agent to pass multiple frames
             # Convert frames to the expected format for the agent
             formatted_frames = []
@@ -633,17 +706,17 @@ async def process_video_frames_and_stream(
                 if frame_base64.startswith("data:image/"):
                     # Extract only the base64 portion if it includes the data URL prefix
                     frame_base64 = frame_base64.split(",")[1]
-                
+
                 # Debug info
                 if i == 0 or i == len(frame_base64_list)-1:
                     print(f"\033[94m[DEBUG] Frame {i} base64 length: {len(frame_base64)} characters\033[0m")
-                    
+
                 formatted_frames.append({
                     "timestamp": frames[i].get('timestamp', i * 3.0),  # Use actual timestamp if available
                     "frame_number": frames[i].get('frame_number', i),  # Use actual frame number if available
                     "image_data": frame_base64  # Key must match what native_agent.py expects
                 })
-            
+
             processing_task = asyncio.create_task(
                 agent.process(
                     user_prompt=enhanced_prompt,
@@ -672,15 +745,15 @@ async def process_video_frames_and_stream(
                     # Get data from the queue with a timeout
                     data = await asyncio.wait_for(queue.get(), timeout=1.0)
                     print(f"[LOG] process_video_frames_and_stream: Received data from queue: {data} (line {inspect.currentframe().f_lineno})")
-                    
+
                     event_type = data.get("type")
                     print(f"[LOG] process_video_frames_and_stream: Received event_type: {event_type} (line {inspect.currentframe().f_lineno})")
-                    
+
                     if event_type == "complete":
                         # This is the final completion event, we need to parse it and yield a complete event
                         complete_content = data.get("content", "{}")
                         print(f"[LOG] process_video_frames_and_stream: Received complete event: {complete_content[:100]}... (line {inspect.currentframe().f_lineno})")
-                        
+
                         # Try to extract the tool call data and send it as a tool event first
                         try:
                             complete_json = json.loads(complete_content)
@@ -697,28 +770,28 @@ async def process_video_frames_and_stream(
                         except Exception as e:
                             print(f"\033[91m[ERROR] Error parsing complete event as tool: {str(e)}\033[0m")
                             # Continue with regular complete event
-                        
+
                         try:
                             # Create a simplified response with just the recommendation
                             simplified_response = {}
-                            
+
                             # Check for errors in the tool_result first
                             tool_result_error = False
                             tool_result = None
-                            
+
                             if isinstance(complete_json, dict):
                                 tool_result = complete_json.get("tool_result", {})
-                                
+
                                 # Check if we have an error in the tool_result
                                 if isinstance(tool_result, str) and "Error" in tool_result:
                                     tool_result_error = True
                                     print(f"\033[93m[WARNING] Tool result contains error: {tool_result}\033[0m")
-                                
+
                                 # Also check for empty dict or None result
                                 if not tool_result or (isinstance(tool_result, dict) and not tool_result):
                                     tool_result_error = True
                                     print(f"\033[93m[WARNING] Tool result is empty or None\033[0m")
-                                    
+
                             # Handle normal case - extract from tool_result
                             if not tool_result_error and isinstance(tool_result, dict):
                                 detailed_report = tool_result.get("detailed_report", "")
@@ -727,12 +800,12 @@ async def process_video_frames_and_stream(
                             elif isinstance(complete_json, dict) and "tool_input" in complete_json:
                                 print(f"\033[94m[INFO] Using tool_input as fallback for recommendation\033[0m")
                                 tool_input = complete_json.get("tool_input", {})
-                                
+
                                 if isinstance(tool_input, dict):
                                     compliance_status = tool_input.get("compliance_status", "unknown")
                                     compliance_summary = tool_input.get("compliance_summary", "")
                                     task_detail = tool_input.get("task_detail", "Brand Compliance Analysis")
-                                    
+
                                     # Create a formatted recommendation from the original input
                                     recommendation_template = "# {0}\n\n## Compliance Status: {1}\n\n## Summary\n{2}\n\n*Note: This report was generated from the initial analysis data.*"
                                     recommendation = recommendation_template.format(task_detail, compliance_status, compliance_summary)
@@ -742,23 +815,99 @@ async def process_video_frames_and_stream(
                                     simplified_response["recommendation"] = str(tool_result)
                             else:
                                 simplified_response["recommendation"] = str(complete_json)
-                            
+
                             # Replace the complete content with our simplified object
                             complete_content = json.dumps(simplified_response)
-                            
+
                             print(f"\033[94m[INFO] Simplified complete response to just include recommendation\033[0m")
                         except Exception as e:
                             print(f"\033[91m[ERROR] Failed to simplify complete event: {str(e)}\033[0m")
                             # Create a basic response if JSON parsing fails
                             complete_content = json.dumps({"recommendation": "Error processing compliance report"})
-                            
+
+                        # Store the compliance analysis results in the database
+                        try:
+                            # Extract the filename from the video URL
+                            import os
+                            from urllib.parse import urlparse
+
+                            # Get filename from URL or use a default
+                            parsed_url = urlparse(video_url)
+                            filename = os.path.basename(parsed_url.path) or "video_analysis.mp4"
+
+                            # Get the complete conversation history from the agent's message handler
+                            complete_conversation = []
+                            try:
+                                # Access the agent's message handler to get the complete conversation history
+                                if hasattr(agent, 'message_handler') and hasattr(agent.message_handler, 'messages'):
+                                    complete_conversation = agent.message_handler.messages
+                                    print(f"[LOG] process_video_frames_and_stream: Retrieved {len(complete_conversation)} messages from agent's message handler")
+                                else:
+                                    print(f"[WARNING] process_video_frames_and_stream: Could not access agent's message handler")
+                            except Exception as e:
+                                print(f"[ERROR] process_video_frames_and_stream: Error accessing agent's message handler: {str(e)}")
+
+                            # Parse the complete content for extraction
+                            results_content = json.loads(complete_content) if isinstance(complete_content, str) else complete_content
+
+                            # Extract brand name and compliance score from the final report
+                            print(f"[LOG] process_video_frames_and_stream: Extracting brand name and compliance score from final report (line {inspect.currentframe().f_lineno})")
+                            extracted_brand_name, extracted_compliance_score = await extract_brand_and_score(results_content)
+                            print(f"[LOG] process_video_frames_and_stream: Extracted brand name: {extracted_brand_name}, compliance score: {extracted_compliance_score} (line {inspect.currentframe().f_lineno})")
+
+                            # Use extracted values or fallback to provided/default values
+                            final_brand_name = extracted_brand_name if extracted_brand_name != "Unknown" else brand_name
+
+                            # Create analysis data with user ID
+                            analysis_data = {
+                                "user_id": user_id,
+                                "type": "video",
+                                "filename": filename,
+                                "brand_name": final_brand_name,
+                                "results": results_content,
+                                "compliance_score": extracted_compliance_score,  # Use the extracted score instead of hardcoded 0
+                                "video_url": video_url,
+                                "agent_messages": agent_messages,  # Store the agent's streamed messages
+                                "complete_conversation": complete_conversation  # Store the complete conversation history
+                            }
+
+                            # Store in database
+                            analysis_id = create_compliance_analysis(analysis_data)
+                            print(f"[LOG] process_video_frames_and_stream: Stored compliance analysis with ID: {analysis_id} (line {inspect.currentframe().f_lineno})")
+
+                            # Log usage tracking with the analysis ID
+                            try:
+                                tracking_id = log_compliance_check(user_id, "video", video_url, analysis_id)
+                                print(f"[LOG] process_video_frames_and_stream: Logged usage tracking with ID: {tracking_id} and analysis_id: {analysis_id} (line {inspect.currentframe().f_lineno})")
+                            except Exception as tracking_error:
+                                print(f"[WARNING] process_video_frames_and_stream: Failed to log usage tracking: {tracking_error} (line {inspect.currentframe().f_lineno})")
+
+                            # Add analysis_id to the response
+                            if isinstance(complete_content, str):
+                                try:
+                                    complete_json = json.loads(complete_content)
+                                    complete_json["analysis_id"] = analysis_id
+                                    complete_content = json.dumps(complete_json)
+                                except:
+                                    # If parsing fails, just use the original content
+                                    pass
+                        except Exception as e:
+                            print(f"[ERROR] process_video_frames_and_stream: Failed to store compliance analysis: {e} (line {inspect.currentframe().f_lineno})")
+                            # Continue even if storage fails
+
                         event_data = f"data: complete:{complete_content}\n\n"
                         yield event_data
                         queue.task_done()
                         break
                     elif event_type == "text":
-                        # Just pass through text events
-                        event_data = f"data: text:{data.get('content', '')}\n\n"
+                        # Get the text content
+                        content = data.get('content', '')
+
+                        # Store agent message
+                        agent_messages.append(content)
+
+                        # Pass through text events
+                        event_data = f"data: text:{content}\n\n"
                         yield event_data
                     elif event_type == "tool":
                         # This is a regular tool event
@@ -774,7 +923,7 @@ async def process_video_frames_and_stream(
                         # Unknown event type, just pass it through
                         event_data = f"data: {event_type}:{data.get('content', '')}\n\n"
                         yield event_data
-                        
+
                     # Each iteration of the loop must call task_done() once
                     queue.task_done()
                 except asyncio.TimeoutError:
@@ -857,8 +1006,15 @@ async def submit_feedback(
             "content": feedback.content,
         }
 
-        # Store feedback in database
+        # Store feedback in Firestore
         feedback_id = create_feedback(feedback_data)
+
+        # Also store in MongoDB for backward compatibility during migration
+        try:
+            mongo_feedback_id = create_feedback_mongo(feedback_data)
+            print(f"[INFO] Feedback also stored in MongoDB with ID: {mongo_feedback_id}")
+        except Exception as e:
+            print(f"[WARNING] Failed to store feedback in MongoDB: {str(e)}")
 
         return {"id": feedback_id, "status": "success"}
     except Exception as e:
@@ -882,12 +1038,196 @@ async def get_feedback(
         List of feedback records
     """
     try:
-        # Get feedback from database
+        # Get feedback from Firestore
         feedback_list = get_user_feedback(current_user["id"])
+
+        # If no feedback found in Firestore, try MongoDB as fallback during migration
+        if not feedback_list:
+            try:
+                print(f"[INFO] No feedback found in Firestore, trying MongoDB")
+                feedback_list = get_user_feedback_mongo(current_user["id"])
+                print(f"[INFO] Found {len(feedback_list)} feedback items in MongoDB")
+            except Exception as e:
+                print(f"[WARNING] Failed to get feedback from MongoDB: {str(e)}")
 
         return {"feedback": feedback_list, "status": "success"}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve feedback: {str(e)}",
+        )
+
+
+@router.get("/compliance/history")
+async def get_compliance_history(
+    current_user: dict = Depends(get_current_user),
+):
+    print(f"[DEBUG] get_compliance_history: Received request with current_user: {current_user}")
+    """
+    Get all compliance analyses for the current user.
+
+    Args:
+        current_user: The authenticated user
+
+    Returns:
+        List of compliance analysis records
+    """
+    try:
+        # Get compliance analyses from database
+        analyses = get_user_compliance_analyses(current_user["id"])
+
+        # Import JSON serializer for handling ObjectId
+        from app.utils.json_encoder import mongo_json_serializer
+        import json
+
+        # Process analyses to include only necessary data
+        processed_analyses = []
+        for analysis in analyses:
+            # Handle any ObjectId in the analysis
+            if "_id" in analysis and not isinstance(analysis["_id"], str):
+                analysis["_id"] = str(analysis["_id"])
+
+            # Extract key information
+            processed_analysis = {
+                "id": analysis["id"],
+                "type": analysis["type"],
+                "filename": analysis.get("filename", "Untitled"),
+                "brand_name": analysis.get("brand_name", "Unknown"),
+                "created_at": analysis["created_at"],
+                "compliance_score": analysis.get("compliance_score", 0),
+            }
+
+            # Add type-specific data
+            if analysis["type"] == "image":
+                processed_analysis["media_type"] = analysis.get("media_type", "image/jpeg")
+                processed_analysis["image_url"] = analysis.get("image_url", "")
+            elif analysis["type"] == "video":
+                processed_analysis["video_url"] = analysis.get("video_url", "")
+
+            # Add media_url for consistency (works for both image and video)
+            processed_analysis["media_url"] = analysis.get("media_url", analysis.get("image_url", analysis.get("video_url", "")))
+
+            processed_analyses.append(processed_analysis)
+
+        return {"analyses": processed_analyses, "status": "success"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve compliance history: {str(e)}",
+        )
+
+
+@router.get("/compliance/usage-metrics")
+async def get_usage_metrics(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get usage metrics for the current user.
+
+    This endpoint returns metrics about:
+    - Total number of compliance analyses performed
+    - Breakdown by type (image vs video)
+    - Number of brand guidelines uploaded
+
+    Args:
+        current_user: The authenticated user
+
+    Returns:
+        Usage metrics for the user
+    """
+    try:
+        # Get usage data from database (last 30 days)
+        from datetime import datetime, timedelta
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        usage_data = get_user_usage(current_user["id"], start_date=thirty_days_ago)
+
+        # Get compliance analyses
+        analyses = get_user_compliance_analyses(current_user["id"])
+
+        # Get brand guidelines
+        brand_guidelines = get_brand_guidelines_by_user(current_user["id"])
+
+        # Calculate metrics
+        total_analyses = len(analyses)
+        image_analyses = sum(1 for analysis in analyses if analysis.get("type") == "image")
+        video_analyses = sum(1 for analysis in analyses if analysis.get("type") == "video")
+        total_guidelines = len(brand_guidelines)
+
+        # Filter usage data to only include valid asset types
+        valid_activity = [activity for activity in usage_data if activity.get('asset_type') in ['image', 'video']]
+
+        # Create metrics response
+        metrics = {
+            "total_analyses": total_analyses,
+            "image_analyses": image_analyses,
+            "video_analyses": video_analyses,
+            "total_guidelines": total_guidelines,
+            "recent_activity": valid_activity[:10] if valid_activity else []  # Include 10 most recent activities (both completed and started)
+        }
+
+        return {"metrics": metrics, "status": "success"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve usage metrics: {str(e)}",
+        )
+
+
+@router.get("/compliance/analysis/{analysis_id}")
+async def get_analysis_detail(
+    analysis_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get details of a specific compliance analysis.
+
+    Args:
+        analysis_id: ID of the analysis to retrieve
+        current_user: The authenticated user
+
+    Returns:
+        Compliance analysis record
+    """
+    try:
+        # Get analysis from database
+        analysis = get_compliance_analysis(analysis_id)
+
+        # Check if analysis exists
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Compliance analysis with ID {analysis_id} not found",
+            )
+
+        # Check if user has access to this analysis
+        if analysis["user_id"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this analysis",
+            )
+
+        # Ensure agent_messages is included in the response
+        if "agent_messages" not in analysis:
+            analysis["agent_messages"] = []
+
+        # Convert ObjectId to string if present
+        if "_id" in analysis:
+            analysis["id"] = str(analysis["_id"])
+
+        # Handle nested ObjectIds in results
+        if "results" in analysis and isinstance(analysis["results"], dict):
+            from app.utils.json_encoder import mongo_json_serializer
+            import json
+
+            # Convert results to JSON and back to handle any ObjectIds
+            results_json = json.dumps(analysis["results"], default=mongo_json_serializer)
+            analysis["results"] = json.loads(results_json)
+
+        return {"analysis": analysis, "status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve compliance analysis: {str(e)}",
         )
