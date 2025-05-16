@@ -20,7 +20,6 @@ const TestFirebaseAuth: React.FC = () => {
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,
-    resetPassword,
     sendVerificationEmail,
     signOut,
     getIdToken,

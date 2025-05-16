@@ -7,8 +7,6 @@ import { AuthProvider } from "./lib/auth-context";
 import ProtectedApp from "./components/auth/ProtectedApp";
 import TestFirebaseAuth from "./test/TestFirebaseAuth";
 import VerificationHandler from "./components/auth/VerificationHandler";
-import ComplianceHistory from "./components/compliance/ComplianceHistory";
-import ComplianceDetail from "./components/compliance/ComplianceDetail";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

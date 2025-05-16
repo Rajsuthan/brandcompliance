@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { UploadGuidelinesModal } from "@/components/ui/upload-guidelines-modal";
 import { FeedbackForm } from "@/components/ui/feedback-form";
 import { ProcessingToast } from "@/components/ui/processing-toast";
-import UserProfile from "@/components/auth/UserProfile";
 import { useAuth } from "@/lib/auth-context";
 import "@/animations.css";
 import {

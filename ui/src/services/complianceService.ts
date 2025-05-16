@@ -9,7 +9,8 @@ export const API_BASE_URL = "http://localhost:8000";
 // export const API_BASE_URL = "https://brandcompliance.onrender.com";
 
 // Interface for authentication response
-interface AuthResponse {
+// Used when verifying Firebase tokens with the backend
+export interface AuthResponse {
   access_token: string;
   token_type: string;
 }

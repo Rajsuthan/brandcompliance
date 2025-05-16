@@ -1,8 +1,8 @@
 // Batch Processing service for compliance operations
-import { API_BASE_URL, login, submitFeedback, getFeedback } from './complianceService';
+import { API_BASE_URL, submitFeedback, getFeedback } from "./complianceService";
 
 // Re-export these functions for convenience
-export { login, submitFeedback, getFeedback };
+export { submitFeedback, getFeedback };
 
 // Interface for compliance check event
 export interface ComplianceEvent {
@@ -13,7 +13,7 @@ export interface ComplianceEvent {
 // Interface for batch processing status
 export interface BatchProcessingStatus {
   id: string;
-  status: 'queued' | 'processing' | 'completed' | 'error';
+  status: "queued" | "processing" | "completed" | "error";
   progress: number;
   result?: string;
   error?: string;
@@ -39,42 +39,48 @@ export const processMediaItem = async (
     // Create form data
     const formData = new FormData();
     formData.append("file", file);
-    
+
     if (isVideo) {
       // For video compliance check
-      formData.append("message", `Analyze this video for ${brandName} brand compliance, focusing on logo usage, colors, and tone of voice. This is specifically an ad for the ${brandName} brand as specified by the user.`);
+      formData.append(
+        "message",
+        `Analyze this video for ${brandName} brand compliance, focusing on logo usage, colors, and tone of voice. This is specifically an ad for the ${brandName} brand as specified by the user.`
+      );
       formData.append("analysis_modes", JSON.stringify(["visual"]));
       formData.append("brand_name", brandName);
-      
+
       // Create fetch request for video
       const controller = new AbortController();
       const { signal } = controller;
-      
-      const response = await fetch(`${API_BASE_URL}/api/compliance/check-video`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-        signal,
-      });
-      
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/compliance/check-video`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+          signal,
+        }
+      );
+
       if (!response.ok) {
         throw new Error(`API request failed: ${response.status}`);
       }
-      
+
       // Set up event stream processing
       const reader = response.body?.getReader();
       if (!reader) {
         throw new Error("Response body is not readable");
       }
-      
+
       // Process the stream
       let buffer = "";
-      
+
       while (true) {
         const { done, value } = await reader.read();
-        
+
         if (done) {
           // Process any remaining data in the buffer
           if (buffer.trim()) {
@@ -82,11 +88,11 @@ export const processMediaItem = async (
           }
           break;
         }
-        
+
         // Convert the chunk to text and add to buffer
         const chunk = new TextDecoder().decode(value);
         buffer += chunk;
-        
+
         // Process complete events in the buffer
         const events = extractEvents(buffer);
         if (events.length > 0) {
@@ -95,7 +101,7 @@ export const processMediaItem = async (
           if (lastNewlineIndex !== -1) {
             buffer = buffer.substring(lastNewlineIndex + 1);
           }
-          
+
           // Process each complete event
           for (const eventData of events) {
             processEventData(eventData, (event) => onEvent(file.name, event));
@@ -104,37 +110,43 @@ export const processMediaItem = async (
       }
     } else {
       // For image compliance check
-      formData.append("text", `Analyze this image for ${brandName} brand compliance, focusing on logo usage, colors, and brand elements.`);
-      
+      formData.append(
+        "text",
+        `Analyze this image for ${brandName} brand compliance, focusing on logo usage, colors, and brand elements.`
+      );
+
       // Create fetch request for image
       const controller = new AbortController();
       const { signal } = controller;
-      
-      const response = await fetch(`${API_BASE_URL}/api/compliance/check-image`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-        signal,
-      });
-      
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/compliance/check-image`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+          signal,
+        }
+      );
+
       if (!response.ok) {
         throw new Error(`API request failed: ${response.status}`);
       }
-      
+
       // Set up event stream processing
       const reader = response.body?.getReader();
       if (!reader) {
         throw new Error("Response body is not readable");
       }
-      
+
       // Process the stream
       let buffer = "";
-      
+
       while (true) {
         const { done, value } = await reader.read();
-        
+
         if (done) {
           // Process any remaining data in the buffer
           if (buffer.trim()) {
@@ -142,11 +154,11 @@ export const processMediaItem = async (
           }
           break;
         }
-        
+
         // Convert the chunk to text and add to buffer
         const chunk = new TextDecoder().decode(value);
         buffer += chunk;
-        
+
         // Process complete events in the buffer
         const events = extractEvents(buffer);
         if (events.length > 0) {
@@ -155,7 +167,7 @@ export const processMediaItem = async (
           if (lastNewlineIndex !== -1) {
             buffer = buffer.substring(lastNewlineIndex + 1);
           }
-          
+
           // Process each complete event
           for (const eventData of events) {
             processEventData(eventData, (event) => onEvent(file.name, event));
@@ -164,7 +176,10 @@ export const processMediaItem = async (
       }
     }
   } catch (error) {
-    console.error(`Error processing ${isVideo ? 'video' : 'image'} for compliance:`, error);
+    console.error(
+      `Error processing ${isVideo ? "video" : "image"} for compliance:`,
+      error
+    );
     throw error;
   }
 };
@@ -178,7 +193,12 @@ export const processMediaItem = async (
  * @returns Promise that resolves when all items have been processed
  */
 export const processBatchMedia = async (
-  mediaItems: Array<{file: File, isVideo: boolean, brandName: string, id: string}>,
+  mediaItems: Array<{
+    file: File;
+    isVideo: boolean;
+    brandName: string;
+    id: string;
+  }>,
   token: string,
   onItemEvent: (id: string, event: ComplianceEvent) => void,
   concurrency: number = 2 // Default to processing 2 items at a time
@@ -186,7 +206,7 @@ export const processBatchMedia = async (
   // Create a queue of media items to process
   const queue = [...mediaItems];
   const activePromises: Promise<void>[] = [];
-  
+
   // Process queue with limited concurrency
   const processQueue = async () => {
     while (queue.length > 0 || activePromises.length > 0) {
@@ -200,43 +220,44 @@ export const processBatchMedia = async (
             item.brandName,
             token,
             (_, event) => onItemEvent(item.id, event)
-          ).catch(error => {
+          ).catch((error) => {
             console.error(`Error processing ${item.id}:`, error);
             // Signal error to UI
             onItemEvent(item.id, {
-              type: 'complete',
+              type: "complete",
               content: JSON.stringify({
-                result: `Error processing ${item.file.name}: ${error.message}`
-              })
+                result: `Error processing ${item.file.name}: ${error.message}`,
+              }),
             });
           });
-          
+
           activePromises.push(promise);
         }
       }
-      
+
       // Wait for at least one promise to complete
       if (activePromises.length > 0) {
-        await Promise.race(activePromises.map(p => p.then(() => {})));
+        await Promise.race(activePromises.map((p) => p.then(() => {})));
         // Remove completed promises
         for (let i = activePromises.length - 1; i >= 0; i--) {
           const promise = activePromises[i];
-          if (promise.hasOwnProperty('resolved')) {
+          if (promise.hasOwnProperty("resolved")) {
             activePromises.splice(i, 1);
           }
         }
       }
     }
   };
-  
+
   await processQueue();
 };
 
 // Helper function to extract complete events from a buffer
 function extractEvents(buffer: string): string[] {
   // Split by newline and filter out empty lines
-  return buffer.split('\n')
-    .filter(line => line.trim())
+  return buffer
+    .split("\n")
+    .filter((line) => line.trim())
     .slice(0, -1); // Exclude the last line which might be incomplete
 }
 
@@ -248,25 +269,25 @@ function processEventData(
   try {
     // Try to parse as JSON
     const parsedData = JSON.parse(eventData);
-    
+
     // Check if it has the expected format
     if (
       parsedData &&
-      typeof parsedData === 'object' &&
-      'type' in parsedData &&
-      'content' in parsedData
+      typeof parsedData === "object" &&
+      "type" in parsedData &&
+      "content" in parsedData
     ) {
       onEvent({
         type: parsedData.type,
-        content: parsedData.content
+        content: parsedData.content,
       });
     }
   } catch (error) {
     // If it's not valid JSON, treat as a text event
     if (eventData.trim()) {
       onEvent({
-        type: 'text',
-        content: eventData
+        type: "text",
+        content: eventData,
       });
     }
   }

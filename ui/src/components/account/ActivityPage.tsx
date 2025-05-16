@@ -15,6 +15,7 @@ interface UsageMetrics {
     user_id: string;
     asset_type: string;
     analysis_id?: string;
+    asset_id?: string; // Added asset_id property
     timestamp: any; // Firestore timestamp
   }>;
 }
