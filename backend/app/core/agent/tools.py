@@ -660,7 +660,7 @@ async def get_brand_guidelines(data):
     if not brand_name:
         return json.dumps({"error": "No brand name provided."})
 
-    query = data.get("query")
+    search_query = data.get("query")
 
     try:
         # Import necessary modules
@@ -674,8 +674,8 @@ async def get_brand_guidelines(data):
         best_match = None
         try:
             # First try an exact match in Firestore
-            query = brand_guidelines_collection.where('brand_name', '==', brand_name).limit(1)
-            matches = list(query.stream())
+            firestore_query = brand_guidelines_collection.where('brand_name', '==', brand_name).limit(1)
+            matches = list(firestore_query.stream())
 
             if matches:
                 # Convert Firestore document to dict
@@ -805,7 +805,7 @@ async def get_brand_guidelines(data):
                 pages = []
 
         # If query parameter is provided, filter pages by content
-        if query:
+        if search_query:
             filtered_pages = []
             for page in pages:
                 # Check if processing_results contains the query
@@ -815,7 +815,7 @@ async def get_brand_guidelines(data):
                     result_text = page.get("processing_results").get("result", "")
                     if (
                         isinstance(result_text, str)
-                        and query.lower() in result_text.lower()
+                        and search_query.lower() in result_text.lower()
                     ):
                         filtered_pages.append(page)
 

@@ -23,9 +23,10 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Firebase service account keys
-backend/app/auth/compliance-d0f59-firebase-adminsdk-fbsvc-2a0b6c762f.json
+# Firebase service account key
 *firebase-adminsdk*.json
 
 tasks
 files_for_testing
+
+auth

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from app.core.firebase_auth import get_current_user_compatibility as get_current_user
 from app.core.agent.index import Agent, encode_image_to_base64
-from app.core.agent.prompt import system_prompt, gemini_system_prompt
+from app.core.agent.improved_prompt import improved_system_prompt
 from app.core.video_agent.video_agent_class import VideoAgent
 # Import MongoDB database functions (will be replaced with Firestore)
 from app.db.database import create_feedback as create_feedback_mongo, get_user_feedback as get_user_feedback_mongo
@@ -157,7 +157,7 @@ async def process_image_and_stream(
     print(f"[LOG] process_image_and_stream: Retrieved {len(user_feedback_list) if user_feedback_list else 0} user feedback items (line {inspect.currentframe().f_lineno})")
 
     # Prepare custom system prompt with user feedback if available
-    custom_system_prompt = gemini_system_prompt
+    custom_system_prompt = improved_system_prompt
     if user_feedback_list and len(user_feedback_list) > 0:
         print(f"[LOG] process_image_and_stream: Adding user feedback to system prompt (line {inspect.currentframe().f_lineno})")
         feedback_section = "\n\n<User Memories and Feedback> !IMPORTANT! \n This is feedback given by the user in previous compliance checks. You need to make sure to acknolwedge your knowledge of these feedback in your initial detailed plan and say that you will follow them \n"
@@ -170,7 +170,7 @@ async def process_image_and_stream(
             print(f"[LOG] process_image_and_stream: Feedback {i+1}: {feedback_content} (line {inspect.currentframe().f_lineno})")
 
         # Add feedback section to system prompt
-        custom_system_prompt = gemini_system_prompt + feedback_section
+        custom_system_prompt = improved_system_prompt + feedback_section
         print(f"[LOG] process_image_and_stream: System prompt updated with user feedback (line {inspect.currentframe().f_lineno})")
     else:
         print(f"[LOG] process_image_and_stream: No user feedback found (line {inspect.currentframe().f_lineno})")
@@ -591,7 +591,7 @@ async def process_video_frames_and_stream(
     user_feedback_list = get_user_feedback(user_id)
 
     # Prepare custom system prompt with user feedback if available
-    custom_system_prompt = gemini_system_prompt
+    custom_system_prompt = improved_system_prompt
 
     # Add brand name information to system prompt if provided
     if brand_name:
@@ -614,7 +614,7 @@ async def process_video_frames_and_stream(
             print(f"🧠 [MEMORY {i+1}] {feedback_content}")
 
         # Add feedback section to system prompt
-        custom_system_prompt = gemini_system_prompt + feedback_section
+        custom_system_prompt = improved_system_prompt + feedback_section
         print(f"🧠 [SYSTEM PROMPT] Added user memories to system prompt")
     else:
         print(f"🧠 [USER MEMORIES] No feedback found for user {user_id}")

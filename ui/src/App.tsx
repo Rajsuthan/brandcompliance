@@ -128,7 +128,15 @@ export default function App() {
           await checkVideoCompliance(
             item.file,
             false,
-            `Analyze this video for ${item.brandName} brand compliance using the provided tools and guidelines. Start by searching for brand guidelines and continue with the analysis. Make sure to do deep research and you must use the provided tools to execute this process.`,
+            `Conduct a comprehensive brand compliance analysis for this ${item.brandName} video. Follow these specific steps:
+1. Research ${item.brandName}'s official brand guidelines thoroughly, focusing on visual identity (logo, colors, typography, imagery), verbal identity (tone, messaging, terminology), and usage rules.
+2. Analyze each frame methodically for visual compliance issues, including logo placement, color accuracy, typography, and overall visual presentation.
+3. Evaluate verbal content for brand voice compliance, including terminology, messaging consistency, and tone alignment.
+4. Document specific timestamps where compliance issues occur, with precise references to the relevant guideline sections.
+5. Provide a detailed compliance score with factual justification based solely on objective guideline violations.
+6. Include actionable recommendations for each identified issue with specific corrections.
+
+Your analysis must be extremely detailed, fact-based, and reference specific sections of ${item.brandName}'s guidelines. Avoid generalizations or assumptions. Use all available tools to extract and analyze every aspect of the video.`,
             authToken,
             (event) => handleItemComplianceEvent(item.id, event),
             ["visual", "brand_voice", "tone"],
@@ -137,7 +145,20 @@ export default function App() {
         } else {
           await checkImageCompliance(
             item.file,
-            `Analyze this image for ${item.brandName} brand compliance using the provided tools and guidelines. Start by searching for brand guidelines and continue with the analysis. Make sure to do deep research and you must use the provided tools to execute this process.`,
+            `Conduct a comprehensive brand compliance analysis for this ${item.brandName} image. Follow these specific steps:
+1. Research ${item.brandName}'s official brand guidelines thoroughly, focusing on visual identity (logo, colors, typography, imagery), verbal identity (tone, messaging, terminology), and usage rules.
+2. Analyze the image methodically for visual compliance issues, examining:
+   - Logo: placement, size, clear space, color version, and any distortions
+   - Colors: exact color values (RGB/HEX/CMYK), gradient usage, and background compatibility
+   - Typography: font families, weights, sizes, and text formatting
+   - Imagery: style, quality, composition, and subject matter
+   - Layout: spacing, alignment, and overall composition
+3. Evaluate any text content for brand voice compliance, including terminology, messaging consistency, and tone alignment.
+4. Document specific areas of the image where compliance issues occur, with precise references to the relevant guideline sections.
+5. Provide a detailed compliance score with factual justification based solely on objective guideline violations.
+6. Include actionable recommendations for each identified issue with specific corrections.
+
+Your analysis must be extremely detailed, fact-based, and reference specific sections of ${item.brandName}'s guidelines. Avoid generalizations or assumptions. Use all available tools to extract and analyze every aspect of the image.`,
             authToken,
             (event) => handleItemComplianceEvent(item.id, event)
           );
@@ -234,6 +255,7 @@ export default function App() {
         };
       });
     } else if (event.type === "complete") {
+      console.log("Received complete event:", event.content.substring(0, 100) + "...");
       updateProcessingItem(itemId, (currentItem) => {
         let finalResult = null;
 
@@ -255,27 +277,49 @@ export default function App() {
                     : JSON.stringify(parsed.result, null, 2);
                 break;
               }
-            } catch {
+            } catch (e) {
+              console.error("Error parsing tool step:", e);
               // Ignore parse errors
             }
           }
         }
 
-        // 2. If not found, fall back to the previous logic (parse event.content for result)
+        // 2. If not found, try to parse the complete event content
         if (!finalResult) {
-          finalResult = event.content;
           try {
             const jsonResult = JSON.parse(event.content);
-            if (jsonResult && jsonResult.result) {
+
+            // Check for tool_result.detailed_report structure (from logs)
+            if (jsonResult && jsonResult.tool_result && jsonResult.tool_result.detailed_report) {
+              console.log("Found detailed_report in complete event");
+              finalResult = jsonResult.tool_result.detailed_report;
+            }
+            // Check for result property
+            else if (jsonResult && jsonResult.result) {
               finalResult =
                 typeof jsonResult.result === "string"
                   ? jsonResult.result
                   : JSON.stringify(jsonResult.result, null, 2);
             }
-          } catch {
+            // Check for tool_result property
+            else if (jsonResult && jsonResult.tool_result) {
+              finalResult =
+                typeof jsonResult.tool_result === "string"
+                  ? jsonResult.tool_result
+                  : JSON.stringify(jsonResult.tool_result, null, 2);
+            }
+            // Fallback to raw content
+            else {
+              finalResult = event.content;
+            }
+          } catch (e) {
+            console.error("Error parsing complete event:", e);
             // Not valid JSON, just use the raw content
+            finalResult = event.content;
           }
         }
+
+        console.log("Final result set:", finalResult ? finalResult.substring(0, 100) + "..." : "null");
 
         // Stop the timer for this item
         stopItemTimer(itemId);

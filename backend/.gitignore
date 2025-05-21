@@ -26,4 +26,4 @@ Thumbs.db
 logs
 logs/conversations
 
-app/auth
+auth

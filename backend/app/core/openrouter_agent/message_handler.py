@@ -122,12 +122,6 @@ class MessageHandler:
         system_messages = [m for m in self.messages if m["role"] == "system"]
         non_system_messages = [m for m in self.messages if m["role"] != "system"]
         
-        # # Limit message history if max_messages is specified
-        # if max_messages is not None and len(non_system_messages) > max_messages:
-        #     # Keep only the most recent messages
-        #     non_system_messages = non_system_messages[-max_messages:]
-        #     print(f"\033[93m[INFO] Limiting conversation history to {max_messages} most recent non-system messages\033[0m")
-            
         # Combine system and limited non-system messages
         formatted_messages = []
         
