@@ -1240,7 +1240,7 @@ Here is a summary of key compliance findings from the analysis:
                                             # Try the current model first
                                             try:
                                                 final_report_response = await self.client.chat.completions.create(
-                                                    model=self.model,
+                                                    model='google/gemini-2.0-flash-001',
                                                     messages=messages_for_completion,
                                                     temperature=self.temperature,
                                                     max_tokens=4000,  # Allow longer response for detailed report
