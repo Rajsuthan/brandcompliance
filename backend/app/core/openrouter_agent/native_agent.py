@@ -41,6 +41,45 @@ FALLBACK_MODELS = [
 ]
 
 class OpenRouterAgent:
+    # Define analysis sections for multi-step report generation
+    ANALYSIS_SECTIONS = [
+        {
+            "id": "initial_assessment",
+            "title": "Initial Assessment",
+            "instruction": "Analyze the overall compliance of the asset with brand guidelines. Focus on identifying any immediate or obvious compliance issues."
+        },
+        {
+            "id": "brand_voice_analysis",
+            "title": "Brand Voice Analysis",
+            "instruction": "Evaluate the brand voice and messaging. Check for tone, language, and messaging consistency with brand guidelines."
+        },
+        {
+            "id": "visual_identity_verification",
+            "title": "Visual Identity Verification",
+            "instruction": "Verify visual elements including logos, colors, typography, and imagery. Ensure they match brand standards."
+        },
+        {
+            "id": "legal_regulatory_checks",
+            "title": "Legal & Regulatory Checks",
+            "instruction": "Check for legal disclaimers, copyright information, and regulatory compliance specific to the industry."
+        },
+        {
+            "id": "technical_validation",
+            "title": "Technical Validation",
+            "instruction": "Verify technical aspects like image resolution, file formats, and accessibility compliance."
+        },
+        {
+            "id": "content_verification",
+            "title": "Content Verification",
+            "instruction": "Check content accuracy, grammar, spelling, and alignment with brand messaging."
+        },
+        {
+            "id": "final_synthesis",
+            "title": "Final Synthesis",
+            "instruction": "Synthesize findings from all sections into a cohesive summary. Provide an overall compliance status and key recommendations."
+        }
+    ]
+    
     def __init__(
         self,
         api_key: str = os.getenv("OPENROUTER_API_KEY"),
@@ -1237,15 +1276,215 @@ Here is a summary of key compliance findings from the analysis:
                                             current_model = self.model
                                             final_report_response = None
 
-                                            # Try the current model first
+                                            # Process each analysis section sequentially
                                             try:
-                                                final_report_response = await self.client.chat.completions.create(
-                                                    model='google/gemini-2.0-flash-001',
-                                                    messages=messages_for_completion,
-                                                    temperature=self.temperature,
-                                                    max_tokens=4000,  # Allow longer response for detailed report
-                                                    stream=False  # No streaming for final report
-                                                )
+                                                # Initialize section results dictionary
+                                                section_results = {}
+                                                section_errors = {}
+                                                
+                                                # Record start time for multi-section processing
+                                                multi_section_start = time.time()
+                                                
+                                                # Process each section
+                                                for section in self.ANALYSIS_SECTIONS:
+                                                    section_id = section['id']
+                                                    section_title = section['title']
+                                                    section_instruction = section['instruction']
+                                                    
+                                                    print(f"\033[94m[INFO] Processing analysis section: {section_title}\033[0m")
+                                                    
+                                                    # Notify the user about current section start
+                                                    if self.message_handler.on_stream:
+                                                        await self.message_handler.on_stream({
+                                                            "type": "text",
+                                                            "content": f"🔍 Starting analysis of {section_title.lower()}..."
+                                                        })
+                                                    
+                                                    # Create section-specific messages by adding the instruction
+                                                    section_messages = messages_for_completion.copy()
+                                                    section_messages.append({
+                                                        "role": "system",
+                                                        "content": f"{section_instruction}\n\nOnly provide analysis for this specific section. Be thorough but concise."
+                                                    })
+                                                    
+                                                    # Record section start time
+                                                    section_start = time.time()
+                                                    
+                                                    # Try to get analysis for this section
+                                                    try:
+                                                        section_response = await self.client.chat.completions.create(
+                                                            model='google/gemini-2.0-flash-001',
+                                                            messages=section_messages,
+                                                            temperature=self.temperature,
+                                                            max_tokens=2000,  # Shorter response for each section
+                                                            stream=False  # No streaming for section analysis
+                                                        )
+                                                        
+                                                        # Extract the section content
+                                                        if section_response and hasattr(section_response, 'choices') and section_response.choices:
+                                                            if len(section_response.choices) > 0 and hasattr(section_response.choices[0], 'message'):
+                                                                message = section_response.choices[0].message
+                                                                if hasattr(message, 'content') and message.content:
+                                                                    section_results[section_id] = message.content
+                                                                    section_duration = time.time() - section_start
+                                                                    print(f"\033[94m[INFO] Successfully completed {section_title} analysis in {section_duration:.2f}s\033[0m")
+                                                                    
+                                                                    # Notify the user about section completion
+                                                                    if self.message_handler.on_stream:
+                                                                        await self.message_handler.on_stream({
+                                                                            "type": "text",
+                                                                            "content": f"✅ Completed analysis of {section_title.lower()} in {section_duration:.1f}s"
+                                                                        })
+                                                                else:
+                                                                    section_results[section_id] = f"No content available for {section_title}"
+                                                                    print(f"\033[93m[WARNING] No content in response for {section_title}\033[0m")
+                                                            else:
+                                                                section_results[section_id] = f"No valid message for {section_title}"
+                                                                print(f"\033[93m[WARNING] No valid message in response for {section_title}\033[0m")
+                                                        else:
+                                                            section_results[section_id] = f"Invalid response format for {section_title}"
+                                                            print(f"\033[93m[WARNING] Invalid response format for {section_title}\033[0m")
+                                                            
+                                                    except Exception as section_error:
+                                                        error_msg = str(section_error)
+                                                        section_results[section_id] = f"Error analyzing {section_title}: {error_msg[:100]}..."
+                                                        section_errors[section_id] = error_msg
+                                                        print(f"\033[91m[ERROR] Failed to analyze {section_title}: {error_msg}\033[0m")
+                                                        
+                                                        # Notify the user about section error
+                                                        if self.message_handler.on_stream:
+                                                            await self.message_handler.on_stream({
+                                                                "type": "text",
+                                                                "content": f"⚠️ Error analyzing {section_title.lower()}: {error_msg[:100]}..."
+                                                            })
+                                                        
+                                                        # Don't stop the whole process for one section error
+                                                        continue
+                                                
+                                                # Notify the user that we're generating the final report
+                                                if self.message_handler.on_stream:
+                                                    await self.message_handler.on_stream({
+                                                        "type": "text",
+                                                        "content": f"📊 Generating comprehensive compliance report..."
+                                                    })
+                                                
+                                                # Combine all section results into a final report
+                                                detailed_report = "# Comprehensive Compliance Analysis Report\n\n"
+                                                
+                                                # Add each section to the report
+                                                for section in self.ANALYSIS_SECTIONS:
+                                                    section_id = section['id']
+                                                    section_title = section['title']
+                                                    section_content = section_results.get(section_id, f"No analysis available for {section_title}")
+                                                    
+                                                    detailed_report += f"## {section_title}\n{section_content}\n\n"
+                                                
+                                                # Use the detailed report directly
+                                                final_report_response = detailed_report
+                                                
+                                                # Calculate total processing time
+                                                multi_section_duration = time.time() - multi_section_start
+                                                print(f"\033[94m[TIMING] Multi-section analysis completed in {multi_section_duration:.2f}s\033[0m")
+                                                
+                                                # Create the final result with the detailed report
+                                                final_result = {
+                                                    "compliance_status": "unknown",  # Will be updated below
+                                                    "compliance_summary": "",  # Will be updated below
+                                                    "detailed_report": detailed_report  # This is now the concatenated multi-section report
+                                                }
+                                                
+                                                # Extract compliance status from the detailed report
+                                                # Look for common patterns in the report to determine compliance status
+                                                if "non-compliant" in detailed_report.lower() or "non_compliant" in detailed_report.lower():
+                                                    final_result["compliance_status"] = "non_compliant"
+                                                elif "compliant" in detailed_report.lower():
+                                                    final_result["compliance_status"] = "compliant"
+                                                
+                                                # First check if we have a final synthesis section which should contain the summary
+                                                final_synthesis_id = "final_synthesis"
+                                                if final_synthesis_id in section_results:
+                                                    final_result["compliance_summary"] = section_results[final_synthesis_id][:500]
+                                                else:
+                                                    # Extract a summary from the report (use the first 500 chars or first paragraph)
+                                                    summary_match = re.search(r'#+\s*Summary\s*\n+([^#]+)', detailed_report, re.IGNORECASE)
+                                                    if summary_match:
+                                                        final_result["compliance_summary"] = summary_match.group(1).strip()[:500]
+                                                    else:
+                                                        # Just use the first 500 chars as a fallback
+                                                        final_result["compliance_summary"] = detailed_report[:500]
+                                                
+                                                # Notify the user that the entire analysis is complete
+                                                if self.message_handler.on_stream:
+                                                    # First send the completion notification
+                                                    await self.message_handler.on_stream({
+                                                        "type": "text",
+                                                        "content": f"🎉 Compliance analysis complete! Processing time: {multi_section_duration:.1f}s"
+                                                    })
+                                                    
+                                                    # Prepare and send the complete event immediately after the notification
+                                                    complete_event_content = json.dumps({
+                                                        "tool_name": "attempt_completion",
+                                                        "task_detail": "Final compliance analysis",
+                                                        "tool_result": final_result
+                                                    })
+                                                    
+                                                    # Send the complete event
+                                                    await self.message_handler.on_stream({
+                                                        "type": "complete",
+                                                        "content": complete_event_content
+                                                    })
+                                                
+                                                print(f"\033[94m[INFO] Successfully generated multi-section report of {len(detailed_report)} characters in {multi_section_duration:.2f}s\033[0m")
+                                                
+                                                # If there were any section errors, log them but continue
+                                                if section_errors:
+                                                    # Log the section errors for debugging
+                                                    for section_id, error_msg in section_errors.items():
+                                                        print(f"\033[93m[WARNING] Section {section_id} error: {error_msg[:100]}...\033[0m")
+                                                    print(f"\033[93m[WARNING] Completed with {len(section_errors)} section errors\033[0m")
+                                                    
+                                                # Add to timing metrics
+                                                timing_metrics["multi_section_processing"] = {
+                                                    "start_time": multi_section_start,
+                                                    "end_time": time.time(),
+                                                    "duration": multi_section_duration,
+                                                    "sections": len(self.ANALYSIS_SECTIONS),
+                                                    "errors": len(section_errors)
+                                                }
+                                                
+                                                # Create the final result with the detailed report
+                                                final_result = {
+                                                    "compliance_status": "unknown",  # Will be updated below
+                                                    "compliance_summary": "",  # Will be updated below
+                                                    "detailed_report": detailed_report  # This is now the concatenated multi-section report
+                                                }
+                                                
+                                                # Extract compliance status from the detailed report
+                                                # Look for common patterns in the report to determine compliance status
+                                                if "non-compliant" in detailed_report.lower() or "non_compliant" in detailed_report.lower():
+                                                    final_result["compliance_status"] = "non_compliant"
+                                                elif "compliant" in detailed_report.lower():
+                                                    final_result["compliance_status"] = "compliant"
+                                                
+                                                # First check if we have a final synthesis section which should contain the summary
+                                                final_synthesis_id = "final_synthesis"
+                                                if final_synthesis_id in section_results:
+                                                    final_result["compliance_summary"] = section_results[final_synthesis_id][:500]
+                                                else:
+                                                    # Extract a summary from the report (use the first 500 chars or first paragraph)
+                                                    summary_match = re.search(r'#+\s*Summary\s*\n+([^#]+)', detailed_report, re.IGNORECASE)
+                                                    if summary_match:
+                                                        summary = summary_match.group(1).strip()
+                                                        # Limit to 500 chars
+                                                        final_result["compliance_summary"] = summary[:500]
+                                                    else:
+                                                        # Just use the first paragraph if no summary section is found
+                                                        paragraphs = detailed_report.split('\n\n')
+                                                        if paragraphs:
+                                                            final_result["compliance_summary"] = paragraphs[0][:500]
+                                                
+                                                # Return the final result
+                                                return final_result
                                             except Exception as model_error:
                                                 # Set the api_error for fallback logic
                                                 api_error = model_error
@@ -1310,13 +1549,26 @@ Here is a summary of key compliance findings from the analysis:
 
                                                         try:
                                                             # Try with Claude 3.7 Sonnet
-                                                            final_report_response = await self.client.chat.completions.create(
+                                                            response = await self.client.chat.completions.create(
                                                                 model=claude_model,
                                                                 messages=messages_for_completion,
                                                                 temperature=self.temperature,
                                                                 max_tokens=4000,  # Allow longer response for detailed report
                                                                 stream=False  # No streaming for final report
                                                             )
+                                                            
+                                                            # Extract the content from the response
+                                                            if response and hasattr(response, 'choices') and response.choices:
+                                                                if len(response.choices) > 0 and hasattr(response.choices[0], 'message'):
+                                                                    message = response.choices[0].message
+                                                                    if hasattr(message, 'content') and message.content:
+                                                                        final_report_response = message.content
+                                                                    else:
+                                                                        raise Exception("Message has no content attribute or empty content")
+                                                                else:
+                                                                    raise Exception("No valid choices in response or message missing")
+                                                            else:
+                                                                raise Exception("Invalid response format")
                                                             # If we get here, the retry worked
                                                             print(f"\033[94m[INFO] Successfully generated report with {claude_model} after waiting {wait_time}s\033[0m")
                                                             retry_successful = True
@@ -1382,13 +1634,26 @@ Here is a summary of key compliance findings from the analysis:
 
                                                             try:
                                                                 # Try with the fallback model
-                                                                final_report_response = await self.client.chat.completions.create(
+                                                                response = await self.client.chat.completions.create(
                                                                     model=fallback_model,
                                                                     messages=messages_for_completion,
                                                                     temperature=self.temperature,
                                                                     max_tokens=4000,  # Allow longer response for detailed report
                                                                     stream=False  # No streaming for final report
                                                                 )
+                                                                
+                                                                # Extract the content from the response
+                                                                if response and hasattr(response, 'choices') and response.choices:
+                                                                    if len(response.choices) > 0 and hasattr(response.choices[0], 'message'):
+                                                                        message = response.choices[0].message
+                                                                        if hasattr(message, 'content') and message.content:
+                                                                            final_report_response = message.content
+                                                                        else:
+                                                                            raise Exception("Message has no content attribute or empty content")
+                                                                    else:
+                                                                        raise Exception("No valid choices in response or message missing")
+                                                                else:
+                                                                    raise Exception("Invalid response format")
                                                                 # If we get here, the fallback worked
                                                                 print(f"\033[94m[INFO] Successfully generated report with fallback model {fallback_model}\033[0m")
                                                                 current_model = fallback_model  # Update current model for logging
@@ -1471,24 +1736,12 @@ Here is a summary of key compliance findings from the analysis:
                                             })
 
                                             # Extract the final detailed report with robust error handling
-                                            detailed_report = "[No detailed report could be generated]"
-
-                                            try:
-                                                if final_report_response and hasattr(final_report_response, 'choices') and final_report_response.choices:
-                                                    if len(final_report_response.choices) > 0 and hasattr(final_report_response.choices[0], 'message'):
-                                                        message = final_report_response.choices[0].message
-                                                        if hasattr(message, 'content') and message.content:
-                                                            detailed_report = message.content
-                                                            print(f"\033[94m[INFO] Successfully generated detailed report of {len(detailed_report)} characters\033[0m")
-                                                        else:
-                                                            print(f"\033[93m[WARNING] Message has no content attribute or empty content\033[0m")
-                                                    else:
-                                                        print(f"\033[93m[WARNING] No valid choices in response or message missing\033[0m")
-                                                else:
-                                                    print(f"\033[93m[WARNING] Invalid response format: {final_report_response}\033[0m")
-                                            except Exception as extract_error:
-                                                print(f"\033[91m[ERROR] Error extracting content from response: {str(extract_error)}\033[0m")
-                                                print(f"\033[91m[ERROR] Response structure: {final_report_response}\033[0m")
+                                            # Since final_report_response is now the detailed report string directly,
+                                            # we don't need to extract it from a response object
+                                            detailed_report = final_report_response
+                                            
+                                            # Log success
+                                            print(f"\033[94m[INFO] Successfully generated detailed report of {len(detailed_report)} characters\033[0m")
 
                                             # Check if we have a valid detailed report
                                             if detailed_report is None or detailed_report.strip() == "":
@@ -1602,6 +1855,10 @@ Here is a summary of key compliance findings from the analysis:
                                         "detailed_report": detailed_report,
                                         "summary": summary
                                     }
+                                    
+                                    # Debug log to check detailed report content
+                                    print(f"\033[94m[DEBUG] Final result detailed_report length: {len(detailed_report)} characters\033[0m")
+                                    print(f"\033[94m[DEBUG] Final result detailed_report preview: {detailed_report[:100]}...\033[0m")
 
                                     # Stream the results (both tool and complete events)
                                     if self.message_handler.on_stream:
@@ -1614,7 +1871,11 @@ Here is a summary of key compliance findings from the analysis:
                                             except Exception as e:
                                                 print(f"\033[93m[WARNING] Error extracting task_detail: {str(e)}\033[0m")
 
-                                        # First ensure we signal this is a tool event
+                                        # Note: We've already sent the complete event earlier in the code
+                                        # during the multi-section report generation.
+                                        # We'll only send the tool event here to avoid duplicate complete events.
+                                        
+                                        # Signal this is a tool event
                                         await self.message_handler.on_stream({
                                             "type": "tool",
                                             "content": json.dumps({
@@ -1623,16 +1884,9 @@ Here is a summary of key compliance findings from the analysis:
                                                 "tool_result": final_result
                                             })
                                         })
-
-                                        # Then signal completion with the same data
-                                        await self.message_handler.on_stream({
-                                            "type": "complete",
-                                            "content": json.dumps({
-                                                "tool_name": "attempt_completion",
-                                                "task_detail": task_detail,
-                                                "tool_result": final_result
-                                            })
-                                        })
+                                        
+                                        # Debug log for the tool event
+                                        print(f"\033[94m[DEBUG] Tool event sent with final_result containing detailed_report of {len(final_result['detailed_report'])} characters\033[0m")
 
                                     # Return the final result
                                     return {
