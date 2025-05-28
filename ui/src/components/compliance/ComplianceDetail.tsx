@@ -9,7 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
-import ReactMarkdown from "react-markdown";
+// Using AnalysisTabs for markdown rendering instead of direct ReactMarkdown
+import { AnalysisTabs } from "./AnalysisTabs";
 
 const ComplianceDetail: React.FC = () => {
   const { analysisId } = useParams<{ analysisId: string }>();
@@ -55,69 +56,209 @@ const ComplianceDetail: React.FC = () => {
     return "bg-red-500";
   };
 
-  const getRecommendation = () => {
-    if (!analysis) return "";
+  // Extract analysis sections from the results
+  const getAnalysisSections = () => {
+    if (!analysis) return {};
 
-    console.log("Analysis results:", analysis.results);
-
+    // Add detailed debugging to understand the data structure
+    console.log("Analysis results (full):", analysis.results);
+    console.log("Analysis results type:", typeof analysis.results);
+    
+    // Always create at least these sections for the tabs
+    const sections: Record<string, {id: string; title: string; content: string; isComplete: boolean}> = {
+      executive_summary: {
+        id: 'executive_summary',
+        title: 'Executive Summary',
+        content: 'Loading executive summary...',
+        isComplete: true
+      },
+      initial_assessment: {
+        id: 'initial_assessment',
+        title: 'Initial Assessment',
+        content: 'Loading initial assessment...',
+        isComplete: true
+      },
+      brand_voice_analysis: {
+        id: 'brand_voice_analysis',
+        title: 'Brand Voice Analysis',
+        content: 'Loading brand voice analysis...',
+        isComplete: true
+      },
+      visual_identity_verification: {
+        id: 'visual_identity_verification',
+        title: 'Visual Identity Verification',
+        content: 'Loading visual identity verification...',
+        isComplete: true
+      }
+    };
+    
     try {
-      // Try to extract tool_result and detailed_report
-      if (
-        analysis.results.tool_result &&
-        analysis.results.tool_result.detailed_report
-      ) {
-        console.log("Found tool_result.detailed_report");
-        return analysis.results.tool_result.detailed_report;
-      }
-
-      // Try to extract detailed_report directly
-      if (analysis.results.detailed_report) {
-        console.log("Found detailed_report");
-        return analysis.results.detailed_report;
-      }
-
-      // Check for XML tags in detailed_report
+      // First check if we have analysis_sections in the results
+      let analysisData = analysis.results;
+      
+      // If results is a string, try to parse it
       if (typeof analysis.results === "string") {
         try {
-          // Try to parse the string as JSON
-          const parsedResults = JSON.parse(analysis.results);
-
-          if (
-            parsedResults.tool_result &&
-            parsedResults.tool_result.detailed_report
-          ) {
-            console.log("Found tool_result.detailed_report in parsed string");
-            return parsedResults.tool_result.detailed_report;
-          }
-
-          if (parsedResults.detailed_report) {
-            console.log("Found detailed_report in parsed string");
-            return parsedResults.detailed_report;
-          }
+          analysisData = JSON.parse(analysis.results);
         } catch (e) {
-          // Not a valid JSON string, continue with other checks
+          console.error("Failed to parse results string:", e);
         }
       }
-
-      // Try to extract recommendation from different result formats
-      if (analysis.results.recommendation) {
-        console.log("Found recommendation");
-        return analysis.results.recommendation;
+      
+      // Check if we have tool_result structure
+      if (analysisData.tool_result) {
+        analysisData = analysisData.tool_result;
       }
-
-      if (analysis.results.summary) {
-        console.log("Found summary");
-        return analysis.results.summary;
+      
+      // Check for analysis_sections
+      if (analysisData.analysis_sections && typeof analysisData.analysis_sections === 'object') {
+        console.log("Found analysis_sections in results");
+        
+        // Process each section
+        Object.entries(analysisData.analysis_sections).forEach(([sectionId, content]) => {
+          // Format the section title from the ID
+          const title = sectionId
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+          
+          // Only update if we have actual content
+          if (content && typeof content === 'string' && content.trim() !== '') {
+            sections[sectionId] = {
+              id: sectionId,
+              title: title,
+              content: content as string,
+              isComplete: true
+            };
+          }
+        });
+        
+        // Add executive summary if available separately
+        if (analysisData.executive_summary && !sections.executive_summary) {
+          sections.executive_summary = {
+            id: 'executive_summary',
+            title: 'Executive Summary',
+            content: analysisData.executive_summary,
+            isComplete: true
+          };
+        }
+      } else {
+        // If no analysis_sections, try to extract sections from the detailed report
+        let detailedReport = "";
+        
+        // Try to get the detailed report
+        if (analysisData.detailed_report) {
+          detailedReport = analysisData.detailed_report;
+        } else if (analysisData.recommendation) {
+          detailedReport = analysisData.recommendation;
+        } else if (analysisData.summary) {
+          detailedReport = analysisData.summary;
+        }
+        
+        if (detailedReport) {
+          console.log("Extracting sections from detailed report");
+          
+          // Extract executive summary if available
+          const execSummaryMatch = detailedReport.match(/#+\s*Executive\s*Summary\s*\n+([^#]+)/i);
+          if (execSummaryMatch) {
+            sections.executive_summary = {
+              id: 'executive_summary',
+              title: 'Executive Summary',
+              content: execSummaryMatch[1].trim(),
+              isComplete: true
+            };
+          }
+          
+          // Extract other sections using regex
+          const sectionMatches = detailedReport.matchAll(/#+\s*([^#\n]+)\s*\n+([^#]+)(?=\n#+|$)/g);
+          for (const match of sectionMatches) {
+            const title = match[1].trim();
+            const content = match[2].trim();
+            
+            // Skip if this is the executive summary (already handled)
+            if (title.toLowerCase().includes('executive summary')) continue;
+            
+            // Create a section ID from the title
+            const sectionId = title.toLowerCase().replace(/\s+/g, '_');
+            
+            sections[sectionId] = {
+              id: sectionId,
+              title: title,
+              content: content,
+              isComplete: true
+            };
+          }
+          
+          // If no executive summary was found, create one from the beginning of the report
+          if (!sections.executive_summary) {
+            // Use the first paragraph or section as the executive summary
+            const firstParagraph = detailedReport.split('\n\n')[0].trim();
+            if (firstParagraph) {
+              sections.executive_summary = {
+                id: 'executive_summary',
+                title: 'Executive Summary',
+                content: firstParagraph,
+                isComplete: true
+              };
+            }
+          }
+        }
       }
-
-      // Fallback to stringified results
-      console.log("Using fallback stringified results");
-      return JSON.stringify(analysis.results, null, 2);
+      
+      // If we still don't have any sections, create a default one with the entire content
+      if (Object.keys(sections).length === 0) {
+        console.log("No sections found, creating default section");
+        
+        // Try to get any content we can
+        let content = "";
+        if (typeof analysisData === 'string') {
+          content = analysisData;
+        } else if (analysisData.detailed_report) {
+          content = analysisData.detailed_report;
+        } else if (analysisData.recommendation) {
+          content = analysisData.recommendation;
+        } else if (analysisData.summary) {
+          content = analysisData.summary;
+        } else {
+          content = JSON.stringify(analysisData, null, 2);
+        }
+        
+        sections.full_report = {
+          id: 'full_report',
+          title: 'Full Report',
+          content: content,
+          isComplete: true
+        };
+        
+        // Create an executive summary from the first paragraph
+        const firstParagraph = content.split('\n\n')[0].trim();
+        if (firstParagraph) {
+          sections.executive_summary = {
+            id: 'executive_summary',
+            title: 'Executive Summary',
+            content: firstParagraph,
+            isComplete: true
+          };
+        }
+      }
+      
+      return sections;
     } catch (error) {
-      console.error("Error parsing results:", error);
-      return "Error displaying compliance report. Please contact support.";
+      console.error("Error extracting analysis sections:", error);
+      
+      // Return a fallback section with error message
+      return {
+        error: {
+          id: 'error',
+          title: 'Error',
+          content: "Error displaying compliance report. Please contact support.",
+          isComplete: true
+        }
+      };
     }
   };
+  
+  // Note: The getRecommendation function has been replaced by getAnalysisSections
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -414,7 +555,56 @@ const ComplianceDetail: React.FC = () => {
                     }
                   `}
                   </style>
-                  <ReactMarkdown>{getRecommendation()}</ReactMarkdown>
+                  {/* Use AnalysisTabs component to display sections with executive summary first */}
+                  {/* Debug output to see what sections are being passed */}
+                  <div className="mb-4 p-2 bg-zinc-800 rounded text-xs">
+                    <p className="text-green-400 mb-2">Debug: Analysis Sections</p>
+                    <pre className="text-zinc-300 overflow-auto max-h-[100px]">
+                      {JSON.stringify(getAnalysisSections(), null, 2)}
+                    </pre>
+                  </div>
+                  
+                  <AnalysisTabs 
+                    sections={getAnalysisSections()} 
+                    MarkdownComponents={{
+                      h1: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
+                        <h1 className="text-lg font-semibold mt-4 mb-3 text-white" {...props} />
+                      ),
+                      h2: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
+                        <h2 className="text-base font-semibold mt-3 mb-2 text-white" {...props} />
+                      ),
+                      h3: (props: React.HTMLAttributes<HTMLHeadingElement>) => (
+                        <h3 className="text-sm font-medium mt-2 mb-1 text-white" {...props} />
+                      ),
+                      p: (props: React.HTMLAttributes<HTMLParagraphElement>) => (
+                        <p className="text-sm leading-relaxed my-2 text-zinc-300" {...props} />
+                      ),
+                      ul: (props: React.HTMLAttributes<HTMLUListElement>) => (
+                        <ul className="list-disc pl-4 my-2 text-zinc-300" {...props} />
+                      ),
+                      ol: (props: React.HTMLAttributes<HTMLOListElement>) => (
+                        <ol className="list-decimal pl-4 my-2 text-zinc-300" {...props} />
+                      ),
+                      li: (props: React.HTMLAttributes<HTMLLIElement>) => (
+                        <li className="text-sm my-1 leading-relaxed" {...props} />
+                      ),
+                      code: ({
+                        inline,
+                        ...props
+                      }: { inline?: boolean } & React.HTMLAttributes<HTMLElement>) =>
+                        inline ? (
+                          <code
+                            className="bg-zinc-800 px-1 py-0.5 rounded text-xs font-mono text-zinc-300"
+                            {...props}
+                          />
+                        ) : (
+                          <code
+                            className="block bg-zinc-800 p-2 rounded-md my-2 overflow-x-auto text-xs font-mono text-zinc-300"
+                            {...props}
+                          />
+                        ),
+                    }} 
+                  />
                 </div>
               </div>
             </CardContent>

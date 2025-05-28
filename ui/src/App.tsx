@@ -3,10 +3,7 @@ import { FeedbackForm } from "@/components/ui/feedback-form";
 import { ProcessingToast } from "@/components/ui/processing-toast";
 import { useAuth } from "@/lib/auth-context";
 import "@/animations.css";
-import {
-  checkImageCompliance,
-  checkVideoCompliance,
-} from "@/services/complianceService";
+import { checkImageCompliance, checkVideoCompliance, ComplianceEvent } from "@/services/complianceService";
 
 // Import modular components
 import {
@@ -17,11 +14,6 @@ import {
   ProcessingStep,
 } from "@/components/compliance";
 
-interface ComplianceEvent {
-  type: "thinking" | "text" | "tool" | "complete";
-  content: string;
-}
-
 export default function App() {
   // Use Firebase authentication
   const { user, getIdToken } = useAuth();
@@ -29,8 +21,11 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [stepsCollapsed, setStepsCollapsed] = useState(false);
 
-  // Processing results state
+  // State for processing items
   const [processingItems, setProcessingItems] = useState<ProcessingItem[]>([]);
+  
+  // Reference to the ProcessingResultGrid component
+  const processingResultGridRef = useRef<any>(null);
   const [currentProcessingIndex, setCurrentProcessingIndex] =
     useState<number>(-1);
   const [showProcessingToast, setShowProcessingToast] = useState(false);
@@ -178,6 +173,7 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
               content: `Error: ${error}`,
             },
           ],
+          finalResult: `Error processing file: ${error}`
         }));
 
         // Stop the timer for this item
@@ -189,27 +185,84 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
     setIsProcessing(false);
   };
 
+  // Store analysis sections for each item
+  const [analysisSections, setAnalysisSections] = useState<Record<string, Record<string, {
+    id: string;
+    title: string;
+    content: string;
+    isComplete: boolean;
+  }>>>({});
+  
   // Handle compliance events for a specific item
   const handleItemComplianceEvent = (
     itemId: string,
     event: ComplianceEvent
   ) => {
     if (event.type === "thinking") return; // Ignore thinking steps
-
-    if (event.type === "text" || event.type === "tool") {
+    
+    // Handle analysis section events
+    if (event.type === "analysis_section" && event.section_id && event.section_title) {
+      // Find the item index
+      const itemIndex = processingItems.findIndex(item => item.id === itemId);
+      if (itemIndex !== -1) {
+        // Add a step for the section update
+        updateProcessingItem(itemId, (currentItem) => {
+          const newSteps = [...currentItem.steps];
+          newSteps.push({
+            id: `${itemId}-section-${event.section_id}-${Date.now()}`,
+            type: "text",
+            content: `${event.is_complete ? "✅" : "🔍"} ${event.section_title}: ${event.is_complete ? "completed" : "in progress"}`,
+          });
+          return { ...currentItem, steps: newSteps };
+        });
+        
+        // Store the section in our local state
+        setAnalysisSections(prev => {
+          const newState = { ...prev };
+          if (!newState[itemId]) {
+            newState[itemId] = {};
+          }
+          
+          // Only update if we have content and section_id
+          if (event.content && event.content.trim() && event.section_id) {
+            newState[itemId][event.section_id] = {
+              id: event.section_id,
+              title: event.section_title || 'Analysis Section',
+              content: event.content,
+              isComplete: event.is_complete || false
+            };
+          }
+          
+          return newState;
+        });
+        
+        // Call the ProcessingResultGrid's handleAnalysisSection method through a ref
+        if (processingResultGridRef.current && processingResultGridRef.current.handleAnalysisSection) {
+          processingResultGridRef.current.handleAnalysisSection(
+            itemIndex,
+            event.section_id,
+            event.section_title,
+            event.content || "",
+            event.is_complete || false
+          );
+        }
+      }
+    }
+    else if (event.type === "text" || event.type === "tool") {
       updateProcessingItem(itemId, (currentItem) => {
         const newSteps = [...currentItem.steps]; // Create a mutable copy
         const lastStep =
           newSteps.length > 0 ? newSteps[newSteps.length - 1] : null;
 
-        // Try to extract task detail from tool content
-        const taskDetail =
-          event.type === "tool" ? extractTaskDetail(event.content) : undefined;
+          // Try to extract task detail from tool content
+          const taskDetail =
+            event.type === "tool" && event.content ? extractTaskDetail(event.content) : undefined;
 
         if (event.type === "text") {
           // Filter out XML tool call responses (full or partial)
           const isXml =
             typeof event.content === "string" &&
+            event.content &&
             event.content.trim().startsWith("<") &&
             event.content.trim().includes(">");
 
@@ -219,12 +272,12 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
           }
 
           // Group consecutive text events into one step, avoid duplicate appends
-          if (lastStep && lastStep.type === "text") {
+          if (lastStep && lastStep.type === "text" && event.content) {
             // Only append if not already present at the end
             if (!lastStep.content.endsWith(event.content)) {
               lastStep.content += event.content;
             }
-          } else {
+          } else if (event.content) {
             const newStep: ProcessingStep = {
               id: `${itemId}-${Date.now()}-${Math.random()
                 .toString(36)
@@ -234,7 +287,7 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
             };
             newSteps.push(newStep);
           }
-        } else if (event.type === "tool") {
+        } else if (event.type === "tool" && event.content) {
           // Always create a new step for tool events
           const newStep: ProcessingStep = {
             id: `${itemId}-${Date.now()}-${Math.random()
@@ -254,7 +307,7 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
           steps: newSteps,
         };
       });
-    } else if (event.type === "complete") {
+    } else if (event.type === "complete" && event.content) {
       console.log("Received complete event:", event.content.substring(0, 100) + "...");
       updateProcessingItem(itemId, (currentItem) => {
         let finalResult = null;
@@ -287,6 +340,7 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
         // 2. If not found, try to parse the complete event content
         if (!finalResult) {
           try {
+            if (!event.content) return { ...currentItem, isProcessing: false, finalResult: "No content provided" };
             const jsonResult = JSON.parse(event.content);
 
             // Check for tool_result.detailed_report structure (from logs)
@@ -321,6 +375,46 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
 
         console.log("Final result set:", finalResult ? finalResult.substring(0, 100) + "..." : "null");
 
+        // Check if we have any analysis sections for this item
+        const sections = analysisSections[itemId];
+        if (sections && Object.keys(sections).length > 0) {
+          console.log(`Using ${Object.keys(sections).length} analysis sections for final result`);
+          
+          // If we don't have an executive summary yet, create one from the final result
+          if (!sections.executive_summary && finalResult) {
+            setAnalysisSections(prev => {
+              const newState = { ...prev };
+              if (!newState[itemId]) {
+                newState[itemId] = {};
+              }
+              
+              newState[itemId].executive_summary = {
+                id: 'executive_summary',
+                title: 'Executive Summary',
+                content: finalResult,
+                isComplete: true
+              };
+              
+              return newState;
+            });
+          }
+        } else if (finalResult) {
+          // If we don't have any sections but we have a final result, create a default section
+          console.log("Creating default section from final result");
+          setAnalysisSections(prev => {
+            const newState = { ...prev };
+            newState[itemId] = {
+              executive_summary: {
+                id: 'executive_summary',
+                title: 'Executive Summary',
+                content: finalResult,
+                isComplete: true
+              }
+            };
+            return newState;
+          });
+        }
+
         // Stop the timer for this item
         stopItemTimer(itemId);
 
@@ -335,6 +429,8 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
 
   // Helper function to extract task detail from tool content
   const extractTaskDetail = (content: string): string | undefined => {
+    if (!content) return undefined;
+    
     try {
       const jsonData = JSON.parse(content);
       if (jsonData && typeof jsonData === "object") {
@@ -433,12 +529,16 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
         {/* Results Section - shown when there are processing items */}
         {processingItems.length > 0 && (
           <ProcessingResultGrid
+            ref={processingResultGridRef}
             items={processingItems}
             stepsCollapsed={stepsCollapsed}
             onToggleStepsCollapse={toggleStepsCollapse}
             onNewAnalysis={handleNewAnalysis}
             formatTime={formatTime}
             currentProcessingIndex={currentProcessingIndex}
+            onAnalysisSection={() => {
+              // This is just a placeholder - we're handling this directly in handleItemComplianceEvent
+            }}
           />
         )}
 

@@ -1285,6 +1285,9 @@ Here is a summary of key compliance findings from the analysis:
                                                 # Record start time for multi-section processing
                                                 multi_section_start = time.time()
                                                 
+                                                # Initialize executive_summary variable to prevent reference errors
+                                                executive_summary = "Executive summary not available."
+                                                
                                                 # Process each section
                                                 for section in self.ANALYSIS_SECTIONS:
                                                     section_id = section['id']
@@ -1295,9 +1298,19 @@ Here is a summary of key compliance findings from the analysis:
                                                     
                                                     # Notify the user about current section start
                                                     if self.message_handler.on_stream:
+                                                        # Send text notification
                                                         await self.message_handler.on_stream({
                                                             "type": "text",
                                                             "content": f"🔍 Starting analysis of {section_title.lower()}..."
+                                                        })
+                                                        
+                                                        # Send section start notification as an analysis_section event
+                                                        await self.message_handler.on_stream({
+                                                            "type": "analysis_section",
+                                                            "section_id": section_id,
+                                                            "section_title": section_title,
+                                                            "content": "",  # Empty content initially
+                                                            "is_complete": False
                                                         })
                                                     
                                                     # Create section-specific messages by adding the instruction
@@ -1331,9 +1344,19 @@ Here is a summary of key compliance findings from the analysis:
                                                                     
                                                                     # Notify the user about section completion
                                                                     if self.message_handler.on_stream:
+                                                                        # First send a text notification
                                                                         await self.message_handler.on_stream({
                                                                             "type": "text",
                                                                             "content": f"✅ Completed analysis of {section_title.lower()} in {section_duration:.1f}s"
+                                                                        })
+                                                                        
+                                                                        # Then send the actual section content as an analysis_section event
+                                                                        await self.message_handler.on_stream({
+                                                                            "type": "analysis_section",
+                                                                            "section_id": section_id,
+                                                                            "section_title": section_title,
+                                                                            "content": message.content,
+                                                                            "is_complete": True
                                                                         })
                                                                 else:
                                                                     section_results[section_id] = f"No content available for {section_title}"
@@ -1365,7 +1388,17 @@ Here is a summary of key compliance findings from the analysis:
                                                 if self.message_handler.on_stream:
                                                     await self.message_handler.on_stream({
                                                         "type": "text",
-                                                        "content": f"📊 Generating comprehensive compliance report..."
+                                                        "content": f"📊 Generating executive summary..."
+                                                    })
+                                                    
+                                                    # Send the executive summary as a completed section - ensure it's sent first
+                                                    await self.message_handler.on_stream({
+                                                        "type": "analysis_section",
+                                                        "section_id": "executive_summary",
+                                                        "section_title": "Executive Summary",
+                                                        "content": executive_summary,
+                                                        "is_complete": True,
+                                                        "priority": 1  # Add priority to ensure it's processed first
                                                     })
                                                 
                                                 # Combine all section results into a final report
@@ -1377,6 +1410,10 @@ Here is a summary of key compliance findings from the analysis:
                                                     section_title = section['title']
                                                     section_content = section_results.get(section_id, f"No analysis available for {section_title}")
                                                     
+                                                    # Ensure section_results has content even if it was empty
+                                                    if section_id not in section_results or not section_results[section_id]:
+                                                        section_results[section_id] = f"No analysis available for {section_title}"
+                                                    
                                                     detailed_report += f"## {section_title}\n{section_content}\n\n"
                                                 
                                                 # Use the detailed report directly
@@ -1385,6 +1422,67 @@ Here is a summary of key compliance findings from the analysis:
                                                 # Calculate total processing time
                                                 multi_section_duration = time.time() - multi_section_start
                                                 print(f"\033[94m[TIMING] Multi-section analysis completed in {multi_section_duration:.2f}s\033[0m")
+                                                
+                                                # Generate an executive summary - this should be shown first in the UI
+                                                try:
+                                                    # Create executive summary messages
+                                                    summary_messages = messages_for_completion.copy()
+                                                    summary_messages.append({
+                                                        "role": "system",
+                                                        "content": "Generate a concise executive summary of the compliance analysis. Include the key findings, compliance status, and main recommendations. Keep it brief but comprehensive. This will be displayed as the first section in the analysis report."
+                                                    })
+                                                    
+                                                    # Get the executive summary
+                                                    summary_response = await self.client.chat.completions.create(
+                                                        model="anthropic/claude-3.7-sonnet",  # Use a faster model for the summary
+                                                        messages=summary_messages,
+                                                        temperature=self.temperature,
+                                                        max_tokens=1000,  # Shorter response for the summary
+                                                        stream=False  # No streaming for summary generation
+                                                    )
+                                                    
+                                                    # Extract the summary content
+                                                    executive_summary = ""
+                                                    if summary_response and hasattr(summary_response, 'choices') and summary_response.choices:
+                                                        if len(summary_response.choices) > 0 and hasattr(summary_response.choices[0], 'message'):
+                                                            message = summary_response.choices[0].message
+                                                            if hasattr(message, 'content') and message.content:
+                                                                executive_summary = message.content
+                                                                
+                                                                # Send the executive summary as a completed section
+                                                                if self.message_handler.on_stream:
+                                                                    await self.message_handler.on_stream({
+                                                                        "type": "text",
+                                                                        "content": f"✅ Executive summary completed"
+                                                                    })
+                                                                    
+                                                                    # Send the executive summary as a completed section
+                                                                    await self.message_handler.on_stream({
+                                                                        "type": "analysis_section",
+                                                                        "section_id": "executive_summary",
+                                                                        "section_title": "Executive Summary",
+                                                                        "content": executive_summary,
+                                                                        "is_complete": True
+                                                                    })
+                                                except Exception as summary_error:
+                                                    print(f"\033[91m[ERROR] Failed to generate executive summary: {str(summary_error)}\033[0m")
+                                                    executive_summary = "Executive summary could not be generated due to an error."
+                                                    
+                                                    # Send error notification for the executive summary
+                                                    if self.message_handler.on_stream:
+                                                        await self.message_handler.on_stream({
+                                                            "type": "text",
+                                                            "content": f"⚠️ Error generating executive summary"
+                                                        })
+                                                        
+                                                        # Send the error as the executive summary content
+                                                        await self.message_handler.on_stream({
+                                                            "type": "analysis_section",
+                                                            "section_id": "executive_summary",
+                                                            "section_title": "Executive Summary",
+                                                            "content": executive_summary,
+                                                            "is_complete": True
+                                                        })
                                                 
                                                 # Create the final result with the detailed report
                                                 final_result = {
@@ -1482,6 +1580,13 @@ Here is a summary of key compliance findings from the analysis:
                                                         paragraphs = detailed_report.split('\n\n')
                                                         if paragraphs:
                                                             final_result["compliance_summary"] = paragraphs[0][:500]
+                                                
+                                                # Ensure executive_summary and analysis_sections are included in the final result
+                                                if "executive_summary" not in final_result:
+                                                    final_result["executive_summary"] = executive_summary
+                                                
+                                                if "analysis_sections" not in final_result:
+                                                    final_result["analysis_sections"] = section_results
                                                 
                                                 # Return the final result
                                                 return final_result

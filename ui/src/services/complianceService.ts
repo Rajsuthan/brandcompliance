@@ -5,8 +5,8 @@
 
 // Base URL for the API
 // local
-// export const API_BASE_URL = "http://localhost:8000";
-export const API_BASE_URL = "https://qalien-backend.onrender.com";
+export const API_BASE_URL = "http://localhost:8000";
+// export const API_BASE_URL = "https://qalien-backend.onrender.com";
 
 // Interface for authentication response
 // Used when verifying Firebase tokens with the backend
@@ -16,9 +16,15 @@ export interface AuthResponse {
 }
 
 // Interface for compliance check event
-interface ComplianceEvent {
-  type: "thinking" | "text" | "tool" | "complete";
-  content: string;
+export interface ComplianceEvent {
+  type: "text" | "tool" | "thinking" | "complete" | "analysis_section";
+  content?: string;
+  tool?: string;
+  tool_input?: string;
+  tool_output?: string;
+  section_id?: string;
+  section_title?: string;
+  is_complete?: boolean;
 }
 
 // Interface for video compliance check request

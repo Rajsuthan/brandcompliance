@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import { Button } from "@/components/ui/button";
 import ReactMarkdown from "react-markdown";
-import { renderResult } from "./renderResult";
 
 export interface ProcessingStep {
   id: string;
@@ -24,21 +23,44 @@ interface ProcessingResultGridProps {
   onNewAnalysis: () => void;
   formatTime: (seconds: number) => string;
   currentProcessingIndex: number; // Index of the file currently being processed
+  analysisSectionsData?: Record<string, Record<string, {
+    id: string;
+    title: string;
+    content: string;
+    isComplete: boolean;
+  }>>;
+  onAnalysisSection?: (itemIndex: number, sectionId: string, sectionTitle: string, content: string, isComplete: boolean) => void;
 }
 
 // Import MediaFile interface
 import { MediaFile } from "./MediaGrid";
 
-export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
+// Define the ref type
+interface ProcessingResultGridRef {
+  handleAnalysisSection: (
+    itemIndex: number,
+    sectionId: string,
+    sectionTitle: string,
+    content: string,
+    isComplete: boolean
+  ) => void;
+}
+
+// Use forwardRef to expose methods to parent components
+export const ProcessingResultGrid = forwardRef<ProcessingResultGridRef, ProcessingResultGridProps>(({
   items,
   stepsCollapsed,
   onToggleStepsCollapse,
   onNewAnalysis,
   formatTime,
   currentProcessingIndex,
-}) => {
+  onAnalysisSection,
+}, ref) => {
   // Add state to track the current item index being viewed
   const [currentIndex, setCurrentIndex] = useState(0);
+  
+  // We'll extract analysis sections directly from the steps
+  // No need for additional state management
 
   // When the currentProcessingIndex changes, automatically view that item
   useEffect(() => {
@@ -55,6 +77,39 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
   const handleNext = () => {
     setCurrentIndex((prev) => Math.min(items.length - 1, prev + 1));
   };
+  
+  // Method to handle analysis section events
+  const handleAnalysisSection = (itemIndex: number, sectionId: string, sectionTitle: string, content: string, isComplete: boolean) => {
+    console.log(`Received analysis section: ${sectionId} for item ${itemIndex}, isComplete: ${isComplete}`);
+    
+    // We're now extracting sections directly from steps, so we just need to make sure
+    // the step data contains the section information we need
+    
+    // Add a step for this section to the item
+    const currentItem = items[itemIndex];
+    if (currentItem && sectionId && content && content.trim()) {
+      // Create a tool step with the section data in JSON format
+      const stepData = {
+        section_id: sectionId,
+        section_title: sectionTitle,
+        content: content,
+        is_complete: isComplete
+      };
+      
+      // The parent component will handle updating the steps
+      console.log(`Prepared section data for ${sectionId}:`, stepData);
+    }
+    
+    // Call the parent handler if provided
+    if (onAnalysisSection) {
+      onAnalysisSection(itemIndex, sectionId, sectionTitle, content, isComplete);
+    }
+  };
+  
+  // Expose methods to parent component via ref
+  useImperativeHandle(ref, () => ({
+    handleAnalysisSection
+  }));
 
   // Custom components for markdown rendering
   const MarkdownComponents = {
@@ -367,27 +422,35 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
               </div>
             )}
 
-            {/* Show final result if available */}
-            {currentItem.finalResult && (
+            {/* Show analysis sections in tabs */}
+            {currentItem.steps.length > 0 && (
               <div className="prose prose-sm prose-zinc dark:prose-invert overflow-auto p-2 max-h-[600px] custom-scrollbar">
-                <div className="bg-green-500/10 text-green-300 px-3 py-2 rounded-md text-xs font-medium mb-3 flex items-center space-x-2">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-4 w-4"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  <span>Analysis complete</span>
-                </div>
+                {!currentItem.isProcessing && (
+                  <div className="bg-green-500/10 text-green-300 px-3 py-2 rounded-md text-xs font-medium mb-3 flex items-center space-x-2">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    <span>Analysis complete</span>
+                  </div>
+                )}
 
-                {/* Render results based on their structure */}
-                {renderResult(currentItem.finalResult, MarkdownComponents)}
+                {/* Simply show the full analysis text */}
+                <div>
+                  {currentItem.finalResult ? (
+                    renderResult(currentItem.finalResult, MarkdownComponents)
+                  ) : (
+                    <div className="text-zinc-400 text-sm">Processing analysis...</div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -517,6 +580,9 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
       return cleaned;
     };
     
+    // We now handle the analysis sections directly in the component
+    // This function is only used for legacy result formats
+    
     try {
       // Try to parse as JSON first
       const parsed = JSON.parse(resultText);
@@ -613,6 +679,6 @@ export const ProcessingResultGrid: React.FC<ProcessingResultGridProps> = ({
       );
     }
   }
-};
+})
 
 export default ProcessingResultGrid;
