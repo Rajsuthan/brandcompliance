@@ -33,6 +33,23 @@ export default function App() {
   // References
   const timersRef = useRef<{ [key: string]: NodeJS.Timeout | null }>({});
 
+  // Helper function to get section titles based on section IDs
+  // This maps the IDs used in backend/app/core/openrouter_agent/native_agent.py ANALYSIS_SECTIONS
+  const getSectionTitle = (sectionId: string): string => {
+    const sectionTitles: Record<string, string> = {
+      "initial_assessment": "Initial Assessment",
+      "brand_voice_analysis": "Brand Voice Analysis",
+      "visual_identity_verification": "Visual Identity Verification",
+      "legal_regulatory_checks": "Legal & Regulatory Checks",
+      "technical_validation": "Technical Validation",
+      "content_verification": "Content Verification",
+      "final_synthesis": "Final Synthesis",
+      "executive_summary": "Executive Summary"
+    };
+    
+    return sectionTitles[sectionId] || sectionId;
+  };
+
   // Cleanup timers on unmount
   useEffect(() => {
     return () => {
@@ -343,8 +360,38 @@ Your analysis must be extremely detailed, fact-based, and reference specific sec
             if (!event.content) return { ...currentItem, isProcessing: false, finalResult: "No content provided" };
             const jsonResult = JSON.parse(event.content);
 
+            // Check for analysis_results tool
+            if (jsonResult && jsonResult.tool_name === "analysis_results" && jsonResult.tool_result) {
+              console.log("Found analysis_results in complete event", Object.keys(jsonResult.tool_result).length);
+              
+              // Update analysis sections with the received data
+              setAnalysisSections(prev => {
+                const newState = { ...prev };
+                if (!newState[itemId]) {
+                  newState[itemId] = {};
+                }
+                
+                // Process each section from the tool result
+                Object.entries(jsonResult.tool_result).forEach(([sectionId, content]) => {
+                  // Find the section title from the analysis sections constant in native_agent.py
+                  const sectionTitle = getSectionTitle(sectionId);
+                  
+                  newState[itemId][sectionId] = {
+                    id: sectionId,
+                    title: sectionTitle || sectionId,
+                    content: typeof content === 'string' ? content : JSON.stringify(content),
+                    isComplete: true
+                  };
+                });
+                
+                return newState;
+              });
+              
+              // Don't set finalResult from analysis_results
+              return { ...currentItem, isProcessing: currentItem.isProcessing };
+            }
             // Check for tool_result.detailed_report structure (from logs)
-            if (jsonResult && jsonResult.tool_result && jsonResult.tool_result.detailed_report) {
+            else if (jsonResult && jsonResult.tool_result && jsonResult.tool_result.detailed_report) {
               console.log("Found detailed_report in complete event");
               finalResult = jsonResult.tool_result.detailed_report;
             }

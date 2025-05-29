@@ -878,7 +878,6 @@ class OpenRouterAgent:
                                         tool_call_id=tool_id,  # Pass the tool_call_id from the API response
                                         on_stream=self.message_handler.on_stream
                                     )
-
                                     # Record tool execution end time
                                     tool_end = time.time()
                                     tool_duration = tool_end - tool_start
@@ -1531,6 +1530,21 @@ Here is a summary of key compliance findings from the analysis:
                                                         "type": "complete",
                                                         "content": complete_event_content
                                                     })
+                                                    
+                                                    # Send the analysis results as a separate stream
+                                                    analysis_results_content = json.dumps({
+                                                        "tool_name": "analysis_results",
+                                                        "task_detail": "Section-by-section analysis results",
+                                                        "tool_result": section_results
+                                                    })
+                                                    
+                                                    # Send the analysis results event
+                                                    await self.message_handler.on_stream({
+                                                        "type": "complete",
+                                                        "content": analysis_results_content
+                                                    })
+                                                    
+                                                    print(f"\033[94m[INFO] Sent analysis_results stream with {len(section_results)} sections\033[0m")
                                                 
                                                 print(f"\033[94m[INFO] Successfully generated multi-section report of {len(detailed_report)} characters in {multi_section_duration:.2f}s\033[0m")
                                                 
@@ -1992,6 +2006,23 @@ Here is a summary of key compliance findings from the analysis:
                                         
                                         # Debug log for the tool event
                                         print(f"\033[94m[DEBUG] Tool event sent with final_result containing detailed_report of {len(final_result['detailed_report'])} characters\033[0m")
+                                        
+                                        # Send the analysis sections as a separate stream
+                                        if section_results and isinstance(section_results, dict):
+                                            try:
+                                                # Signal this is a tool event with analysis_results
+                                                await self.message_handler.on_stream({
+                                                    "type": "tool",
+                                                    "content": json.dumps({
+                                                        "tool_name": "analysis_results",
+                                                        "task_detail": "Section-by-section analysis results",
+                                                        "tool_result": section_results
+                                                    })
+                                                })
+                                                
+                                                print(f"\033[94m[INFO] Sent analysis_results stream with {len(section_results)} sections\033[0m")
+                                            except Exception as e:
+                                                print(f"\033[93m[WARNING] Error sending analysis_results: {str(e)}\033[0m")
 
                                     # Return the final result
                                     return {
@@ -2177,7 +2208,6 @@ Here is a summary of key compliance findings from the analysis:
                                         "content": str(tool_result)
                                     }
                                 )
-
                                 # If attempt_completion, return result
                                 if tool_name == "attempt_completion":
                                     attempt_completion_result = tool_result
@@ -2307,3 +2337,5 @@ Here is a summary of key compliance findings from the analysis:
             "tool_trace": tool_trace,
             "model": self.model
         }
+
+
