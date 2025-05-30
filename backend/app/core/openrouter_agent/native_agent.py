@@ -876,7 +876,9 @@ class OpenRouterAgent:
                                         image_base64,
                                         frames,
                                         tool_call_id=tool_id,  # Pass the tool_call_id from the API response
-                                        on_stream=self.message_handler.on_stream
+                                        on_stream=self.message_handler.on_stream,
+                                        video_url=video_name,  # Pass video_name as video_url for search_video tool
+                                        user_id=self.conversation_id  # Use conversation_id as user_id
                                     )
                                     # Record tool execution end time
                                     tool_end = time.time()

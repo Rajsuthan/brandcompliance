@@ -16,6 +16,8 @@ async def execute_and_process_tool(
     frames: List[Dict[str, Any]] = None,
     tool_call_id: Optional[str] = None,
     on_stream = None,
+    video_url: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Sanitize the tool_call_id to prevent token explosion
     # If it's too long, truncate or hash it
@@ -42,6 +44,13 @@ async def execute_and_process_tool(
         tool_args_str = str(tool_args)
         print(f"\033[92m[TOOL EXEC] Executing {tool_name}...\033[0m")
         print(f"\033[92m[TOOL INPUT SIZE] {tool_name}: {len(tool_args_str)} chars\033[0m")
+        
+        # For video search tool, ensure video_url and user_id are passed
+        if tool_name == "search_video" and video_url and user_id:
+            # Add video_url and user_id to the tool arguments
+            tool_args["video_url"] = video_url
+            tool_args["user_id"] = user_id
+            print(f"\033[92m[TOOL EXEC] Adding video_url and user_id to search_video tool\033[0m")
 
         # Log all keys in tool_args
         if isinstance(tool_args, dict):

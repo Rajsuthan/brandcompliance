@@ -634,8 +634,36 @@ async def process_video_frames_and_stream(
         # Download the video to a temporary file
         video_path_tuple = await download_video(video_url)
         video_path = video_path_tuple[0]  # Get the path to the downloaded video
+        
+        # Process with Twelve Labs synchronously and send status updates
+        try:
+            from app.core.video_agent.twelve_labs_processor import process_video_for_twelve_labs
+            
+            # Send status update about Twelve Labs processing
+            yield "data: status:Processing video with Twelve Labs for searchable content...\n\n"
+            print(f"\033[92m[TWELVE LABS] Processing video with Twelve Labs: {video_url}\033[0m")
+            
+            # Process the video synchronously
+            success, error = await process_video_for_twelve_labs(
+                video_path=video_path,
+                user_id=user_id,
+                video_url=video_url
+            )
+            
+            if success:
+                yield "data: status:Video successfully processed for search capabilities\n\n"
+                print(f"\033[92m[TWELVE LABS] Video successfully processed for search: {video_url}\033[0m")
+            else:
+                yield f"data: status:Warning: Search processing failed - {error}\n\n"
+                print(f"\033[93m[TWELVE LABS] Warning: Search processing failed: {error}\033[0m")
+                
+        except Exception as e:
+            # Log error but continue with normal processing
+            error_msg = f"Error processing video for search: {str(e)}"
+            yield f"data: status:Warning: {error_msg}\n\n"
+            print(f"\033[91m[ERROR] {error_msg}\033[0m")
 
-        # Yield status update
+        # Yield status update for frame extraction
         yield "data: status:Extracting video frames for analysis...\n\n"
 
         # Extract frames from the video (with a reasonable interval to avoid too many frames)

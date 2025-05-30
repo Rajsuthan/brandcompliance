@@ -399,6 +399,33 @@ def get_tool_schemas() -> List[Dict[str, Any]]:
                 }
             }
         },
+        # --- VIDEO SEARCH TOOL ---
+        {
+            "type": "function",
+            "function": {
+                "name": "search_video",
+                "description": "Search within the video for specific content, returning timestamps where the content appears",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query describing what to look for in the video"
+                        },
+                        "threshold": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low", "none"],
+                            "description": "The confidence threshold for results (high, medium, low, none)"
+                        },
+                        "task_detail": {
+                            "type": "string",
+                            "description": "A quick title about the task you are doing"
+                        }
+                    },
+                    "required": ["query", "task_detail"]
+                }
+            }
+        },
         # --- COMPLETION TOOL ---
         {
             "type": "function",

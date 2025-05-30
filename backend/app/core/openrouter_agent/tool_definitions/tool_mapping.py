@@ -19,6 +19,8 @@ from app.core.agent.tools import (
     check_text_grammar as _check_text_grammar,
     attempt_completion as _attempt_completion,
 )
+# Import the video search tool
+from app.core.openrouter_agent.tools.search_video import search_video as _search_video
 
 
 async def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> Any:
@@ -67,6 +69,7 @@ TOOL_MAPPING: Dict[str, Callable[[Dict[str, Any]], Any]] = {
     "get_video_fonts": _get_video_fonts,
     "check_video_frame_specs": _check_video_frame_specs,
     "extract_verbal_content": _extract_verbal_content,
+    "search_video": _search_video,  # New Twelve Labs video search tool
 
     # Guidelines tools
     "search_brand_guidelines": _search_brand_guidelines,
