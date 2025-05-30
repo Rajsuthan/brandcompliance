@@ -555,15 +555,7 @@ const ComplianceDetail: React.FC = () => {
                     }
                   `}
                   </style>
-                  {/* Use AnalysisTabs component to display sections with executive summary first */}
-                  {/* Debug output to see what sections are being passed */}
-                  <div className="mb-4 p-2 bg-zinc-800 rounded text-xs">
-                    <p className="text-green-400 mb-2">Debug: Analysis Sections</p>
-                    <pre className="text-zinc-300 overflow-auto max-h-[100px]">
-                      {JSON.stringify(getAnalysisSections(), null, 2)}
-                    </pre>
-                  </div>
-                  
+        
                   <AnalysisTabs 
                     sections={getAnalysisSections()} 
                     MarkdownComponents={{
