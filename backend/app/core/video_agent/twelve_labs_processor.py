@@ -4,8 +4,10 @@ import asyncio
 import logging
 import os
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List, Union, BinaryIO, Callable, Literal
 from datetime import datetime
+
+from twelvelabs import types, models
 
 from app.core.twelve_labs.client import TwelveLabsClient
 from app.db.firestore_twelve_labs import (
@@ -55,63 +57,54 @@ async def process_video_for_twelve_labs(
         # Check if index exists, create if it doesn't
         logger.info(f"🔄 TWELVE LABS PROCESSOR: Getting or creating index '{DEFAULT_INDEX_NAME}'")
         
-        # Get a list of existing indexes and check if ours exists
+        index_id: Optional[str] = None
         try:
-            # Use methods from our TwelveLabsClient implementation
-            try:
-                indexes = client.list_indexes()
-                logger.info(f"🔄 TWELVE LABS PROCESSOR: Found {len(indexes)} existing indexes")
-            except Exception as e:
-                logger.error(f"🔄 TWELVE LABS PROCESSOR: Failed to list indexes: {str(e)}")
-                indexes = []
+            logger.info(f"🔄 TWELVE LABS PROCESSOR: Attempting to retrieve index directly by name: '{DEFAULT_INDEX_NAME}'")
+            # Use the 'name' parameter for a direct lookup
+            # client.indexes.list() returns a RootModelList[models.Index]
+            matching_indexes_list = client.indexes.list(name=DEFAULT_INDEX_NAME)
             
-            # Try to find our index by name
-            index_id = None
-            for index in indexes:
-                # Check various ways the name might be stored based on SDK version
-                index_name = None
-                if isinstance(index, dict):
-                    index_name = index.get('name', index.get('display_name', None))
-                    if index_name and DEFAULT_INDEX_NAME in index_name:
-                        index_id = index.get('id', index.get('_id', None))
-                        break
+            found_index_model: Optional[models.Index] = None
+            if matching_indexes_list and len(matching_indexes_list.data) > 0:
+                # If the list is not empty, the first item should be our index
+                found_index_model = matching_indexes_list.data[0]
+                if found_index_model.name == DEFAULT_INDEX_NAME:
+                    index_id = found_index_model.id
+                    logger.info(f"🔄 TWELVE LABS PROCESSOR: Found existing index '{DEFAULT_INDEX_NAME}' with ID: {index_id} via direct name lookup.")
                 else:
-                    # Try attribute access
-                    if hasattr(index, 'name') and getattr(index, 'name') and DEFAULT_INDEX_NAME in getattr(index, 'name'):
-                        index_id = getattr(index, 'id', getattr(index, '_id', None))
-                        break
-                    elif hasattr(index, 'display_name') and getattr(index, 'display_name') and DEFAULT_INDEX_NAME in getattr(index, 'display_name'):
-                        index_id = getattr(index, 'id', getattr(index, '_id', None))
-                        break
+                    # This case should ideally not happen if the name filter works as expected
+                    logger.warning(f"🔄 TWELVE LABS PROCESSOR: Index found by name filter does not match '{DEFAULT_INDEX_NAME}'. Name found: {found_index_model.name}. Proceeding to create.")
+                    found_index_model = None # Reset to ensure creation
+            else:
+                logger.info(f"🔄 TWELVE LABS PROCESSOR: No index found with name '{DEFAULT_INDEX_NAME}' via direct lookup.")
             
-            # If index doesn't exist, create it
-            if not index_id:
-                logger.info(f"🔄 TWELVE LABS PROCESSOR: Index '{DEFAULT_INDEX_NAME}' not found, creating it")
-                try:
-                    # Use our TwelveLabsClient implementation
-                    new_index = client.create_index(
-                        index_name=DEFAULT_INDEX_NAME,
-                        models=[{
-                            "model_name": "marengo2.7",
-                            "model_options": ["visual", "audio"]
-                        }],
-                        addons=["thumbnail"]
+            if not found_index_model:
+                logger.info(f"🔄 TWELVE LABS PROCESSOR: Index '{DEFAULT_INDEX_NAME}' not found, creating it.")
+                # Define engine configurations using types.IndexModel
+                index_models_config = [
+                    types.IndexModel(
+                        name="marengo2.6",  # Confirm this is the desired engine, or use a newer one if available
+                        options=[
+                            types.VIDEO_INDEXING_OPTIONS_VISUAL,
+                            types.VIDEO_INDEXING_OPTIONS_CONVERSATION,
+                            types.VIDEO_INDEXING_OPTIONS_TEXT_IN_VIDEO,
+                            types.VIDEO_INDEXING_OPTIONS_LOGO
+                        ]
                     )
-                    
-                    # Extract index ID
-                    if isinstance(new_index, dict):
-                        index_id = new_index.get('id', new_index.get('_id'))
-                    elif hasattr(new_index, 'id'):
-                        index_id = new_index.id
-                        
-                    logger.info(f"🔄 TWELVE LABS PROCESSOR: Created new index with ID: {index_id}")
-                except Exception as e:
-                    logger.error(f"🔄 TWELVE LABS PROCESSOR: Error creating index: {str(e)}")
-                    # We won't attempt a fallback since we're using our implementation
+                ]
+                # Optional: specify addons
+                addons_config = ["thumbnail"]
 
-                # Index ID is already extracted in the try/except blocks above
+                created_index_model = client.indexes.create(
+                    name=DEFAULT_INDEX_NAME,
+                    models=index_models_config,
+                    addons=addons_config
+                )
+                index_id = created_index_model.id
+                logger.info(f"🔄 TWELVE LABS PROCESSOR: Created new index '{DEFAULT_INDEX_NAME}' with ID: {index_id}")
+
         except Exception as e:
-            logger.error(f"🔄 TWELVE LABS PROCESSOR: Error listing/creating indexes: {str(e)}")
+            logger.error(f"🔄 TWELVE LABS PROCESSOR: Error listing or creating indexes: {e}", exc_info=True)
         
         if not index_id:
             logger.error("🔄 TWELVE LABS PROCESSOR: Failed to get or create Twelve Labs index")
@@ -119,111 +112,110 @@ async def process_video_for_twelve_labs(
         
         logger.info(f"🔄 TWELVE LABS PROCESSOR: Using index with ID: {index_id}")
         
-        # Upload video to Twelve Labs
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Uploading video to Twelve Labs")
-        upload_start = time.time()
-        video_id = client.upload_video(
-            video_path=video_path,
-            index_id=index_id,
-        )
-        upload_duration = time.time() - upload_start
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Video upload completed in {upload_duration:.2f}s")
-        
-        if not video_id:
-            logger.error("🔄 TWELVE LABS PROCESSOR: Failed to upload video to Twelve Labs")
-            return False, "Failed to upload video for search indexing"
-        
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Video uploaded with ID: {video_id}")
-            
-        # Store mapping in database
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Storing mapping in database")
-        store_start = time.time()
-        success = await store_twelve_labs_mapping(
-            video_url=video_url,
-            user_id=user_id,
-            twelve_labs_index_id=index_id,
-            twelve_labs_video_id=video_id,
-            status="processing"
-        )
-        store_duration = time.time() - store_start
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Mapping storage completed in {store_duration:.2f}s (success: {success})")
-        
-        if not success:
-            logger.error("🔄 TWELVE LABS PROCESSOR: Failed to store Twelve Labs mapping")
-            return False, "Failed to store search mapping data"
-            
-        # Wait for processing to start
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Checking if processing has started")
-        processing_start = time.time()
-        processing_started = client.check_processing_started(video_id, index_id)
-        processing_check_duration = time.time() - processing_start
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Processing check completed in {processing_check_duration:.2f}s (started: {processing_started})")
-        
-        if not processing_started:
-            logger.error("🔄 TWELVE LABS PROCESSOR: Video processing failed to start")
-            await update_twelve_labs_status(
+        # Create a video indexing task
+        logger.info(f"🔄 TWELVE LABS PROCESSOR: Creating video indexing task for video '{video_path}' in index '{index_id}'.")
+        task: Optional[models.Task] = None
+        try:
+            task = client.tasks.create(index_id=index_id, file=video_path)
+            logger.info(f"🔄 TWELVE LABS PROCESSOR: Task created with ID: {task.id}, current status: {task.status}")
+
+            # Store initial mapping with task ID and processing status
+            # Assuming store_twelve_labs_mapping can handle twelve_labs_video_id=None initially
+            # and that we might add twelve_labs_task_id to our DB model/function.
+            # For now, we'll pass video_id as None.
+            await store_twelve_labs_mapping(
                 video_url=video_url,
                 user_id=user_id,
-                status="failed",
-                error_message="Video processing failed to start"
+                twelve_labs_index_id=index_id,
+                twelve_labs_video_id=None, # Video ID is not known until task is 'ready'
+                status="processing", # Initial status
+                # twelve_labs_task_id=task.id # Ideal: store task.id for out-of-band checks
             )
-            return False, "Video processing failed to start"
-        
-        # Now we'll wait for processing to complete (up to max_wait_time)
-        logger.info(f"🔄 TWELVE LABS PROCESSOR: Waiting for video processing to complete (max {max_wait_time} seconds)")
-        
-        # Start the wait loop
-        wait_start_time = time.time()
-        max_checks = max_wait_time // check_interval
-        is_complete = False
-        
-        for i in range(max_checks):
-            # Check if we've exceeded the max wait time
-            elapsed_time = time.time() - wait_start_time
-            if elapsed_time >= max_wait_time:
-                logger.warning(f"🔄 TWELVE LABS PROCESSOR: Reached maximum wait time of {max_wait_time}s")
-                break
-            
-            # Wait before checking status
-            logger.info(f"🔄 TWELVE LABS PROCESSOR: Waiting {check_interval}s before check {i+1}/{max_checks}")
-            await asyncio.sleep(check_interval)
-            
-            # Check processing status
-            logger.info(f"🔄 TWELVE LABS PROCESSOR: Checking processing status (check {i+1}/{max_checks})")
-            try:
-                is_complete = client.check_processing_complete(
-                    video_id=video_id,
-                    index_id=index_id
+            logger.info(f"🔄 TWELVE LABS PROCESSOR: Initial mapping stored for task {task.id}.")
+
+        except Exception as e:
+            logger.error(f"🔄 TWELVE LABS PROCESSOR: Failed to create video indexing task: {e}", exc_info=True)
+            await update_twelve_labs_status(
+                video_url=video_url, user_id=user_id, status="failed", error_message=f"Failed to create indexing task: {e}"
+            )
+            return False, f"Failed to create indexing task: {e}"
+
+        # Define callback for wait_for_done
+        def log_task_progress(updated_task: models.Task):
+            progress = updated_task.process.get('percentage', 0) if updated_task.process else 'N/A'
+            logger.info(f"🔄 TWELVE LABS PROCESSOR: Task {updated_task.id} status: {updated_task.status}, progress: {progress}%")
+
+        # Wait for the task to complete
+        logger.info(f"🔄 TWELVE LABS PROCESSOR: Waiting for task {task.id} to complete (max_wait_time: {max_wait_time}s, check_interval: {check_interval}s)...")
+        completed_task: Optional[models.Task] = None
+        try:
+            # Wrap wait_for_done with asyncio.wait_for to enforce our max_wait_time
+            # task.wait_for_done is blocking, so it needs to be run in an executor for asyncio.wait_for
+            # However, the SDK might handle async operations internally if used in an async context.
+            # For simplicity here, assuming direct call and relying on SDK's potential internal timeout
+            # or handling exceptions if it blocks too long without its own timeout matching max_wait_time.
+            # A more robust solution for strict timeout with blocking calls in asyncio is run_in_executor.
+            # The guide mentions this complexity. For now, direct call:
+            completed_task = await asyncio.wait_for(
+                asyncio.to_thread(
+                    task.wait_for_done,
+                    sleep_interval=float(check_interval),
+                    callback=log_task_progress
+                ),
+                timeout=float(max_wait_time)
+            )
+            # The asyncio.wait_for wrapper will raise asyncio.TimeoutError if max_wait_time is exceeded.
+
+            if completed_task.status == "ready":
+                final_video_id = completed_task.video_id
+                logger.info(f"✅ TWELVE LABS PROCESSOR: Task {completed_task.id} completed. Video ID: {final_video_id}")
+                await update_twelve_labs_status(
+                    video_url=video_url,
+                    user_id=user_id,
+                    status="ready",
+                    twelve_labs_video_id=final_video_id # Update with the actual video_id
                 )
-                
-                if is_complete:
-                    logger.info(f"🔄 TWELVE LABS PROCESSOR: Processing completed after {i+1} checks ({elapsed_time:.2f}s)")
-                    # Update status in database
-                    await update_twelve_labs_status(
-                        video_url=video_url,
-                        user_id=user_id,
-                        status="completed"
-                    )
-                    break
-                else:
-                    logger.info(f"🔄 TWELVE LABS PROCESSOR: Processing still in progress (check {i+1}/{max_checks})")
-                    # Update status with progress
-                    await update_twelve_labs_status(
-                        video_url=video_url,
-                        user_id=user_id,
-                        status="processing",
-                        metadata={"progress": (i+1)/max_checks}
-                    )
-            except Exception as e:
-                logger.warning(f"🔄 TWELVE LABS PROCESSOR: Error checking status: {str(e)}")
-                # Continue checking despite error
-                continue
+                total_duration = time.time() - start_time
+                logger.info(f"✅ TWELVE LABS PROCESSOR: Successfully processed video {video_url} in {total_duration:.2f}s")
+                return True, None
+            else:
+                error_msg = f"Video processing task {completed_task.id} failed. Status: {completed_task.status} Medata: {completed_task.metadata}."
+                if completed_task.error_message:
+                    error_msg += f" Details: {completed_task.error_message}"
+                logger.error(f"❌ TWELVE LABS PROCESSOR: {error_msg}")
+                await update_twelve_labs_status(
+                    video_url=video_url, user_id=user_id, status="failed", error_message=error_msg
+                )
+                return False, error_msg
         
-        total_duration = time.time() - start_time
-        
-        if is_complete:
-            logger.info(f"🔄 TWELVE LABS PROCESSOR: Video {video_url} successfully processed in {total_duration:.2f}s")
-            return True, None
+        except asyncio.TimeoutError:
+            logger.warning(f"⌛ TWELVE LABS PROCESSOR: Video processing task {task.id} timed out after {max_wait_time}s (our configured timeout). Attempting to retrieve final status.")
+            # If our own timeout wrapper (not implemented here fully for blocking call) triggers, or if we want to handle it:
+            try:
+                current_task_status = client.tasks.retrieve(id=task.id)
+                error_msg = f"Processing timed out. Last known status for task {task.id}: {current_task_status.status}"
+                await update_twelve_labs_status(video_url=video_url, user_id=user_id, status="failed", error_message=error_msg)
+                return False, error_msg
+            except Exception as retrieve_e:
+                logger.error(f"❌ TWELVE LABS PROCESSOR: Failed to retrieve status for timed-out task {task.id}: {retrieve_e}", exc_info=True)
+                await update_twelve_labs_status(video_url=video_url, user_id=user_id, status="failed", error_message="Processing timed out, final status unknown.")
+                return False, "Processing timed out, final status unknown."
+
+        except Exception as e:
+            logger.error(f"❌ TWELVE LABS PROCESSOR: Error waiting for task {task.id} to complete: {e}", exc_info=True)
+            # Attempt to get last known status
+            last_status = "unknown"
+            if task:
+                try:
+                    current_task_state = client.tasks.retrieve(id=task.id)
+                    last_status = current_task_state.status
+                except Exception as retrieve_e:
+                    logger.error(f"Failed to retrieve status for task {task.id} after error: {retrieve_e}")
+            error_message_for_db = f"Error during video processing: {e}. Last known status: {last_status}"
+            await update_twelve_labs_status(
+                video_url=video_url, user_id=user_id, status="failed", error_message=error_message_for_db
+            )
+            return False, error_message_for_db
         else:
             # Processing started but didn't complete within our wait time
             # This is still a success as it will complete in the background
